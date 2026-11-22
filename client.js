@@ -762,6 +762,8 @@ window.__ModuleLoader__.load({
                   h('dd', { className: 'dcnb-mono' }, user?.username ?? '—'),
                   h('dt', null, '登录时间'),
                   h('dd', null, account?.loginAt === null || account?.loginAt === undefined ? '—' : new Date(account.loginAt).toLocaleString()),
+                  h('dt', null, '令牌名称'),
+                  h('dd', { className: 'dcnb-mono' }, account?.tokenName ?? '—'),
                   h('dt', null, '令牌过期'),
                   h('dd', null, account?.expiredAt ? new Date(account.expiredAt).toLocaleString() : '长期有效'),
                   h('dt', null, '登录 Cookie'),

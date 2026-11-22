@@ -29,6 +29,7 @@ const suites = [
   ['logout', 'logout.test.mjs', false],
   ['login-panel', 'login-panel.test.mjs', false],
   ['session-only', 'session-only.test.mjs', false],
+  ['token-name', 'token-name.test.mjs', false],
   ['session-fallback', 'session-fallback.test.mjs', false],
   ['session-capability', 'session-capability.test.mjs', false],
   ['mini-yaml', 'mini-yaml.test.mjs', false],
