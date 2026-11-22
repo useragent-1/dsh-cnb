@@ -89,7 +89,7 @@ function withFetch(respond) {
   }
 }
 
-// --- case 5: a session refusal is surfaced, not looped -------------------
+// --- case 5: every console shape is tried, and the failures are named ----
 {
   const calls = withFetch((url) => {
     if (String(url).startsWith('https://api.cnb.cool/')) return json(403, { errcode: 9, errmsg: 'root group management rules' })
@@ -97,8 +97,36 @@ function withFetch(respond) {
   })
   try {
     const api = new CnbApi({ token: async () => 'tok', api: 'https://api.cnb.cool', web: 'https://cnb.cool', session: async () => 'csrftoken=x' })
-    await assert.rejects(() => api.deleteRepo('catboy98/13ff'), /permission denied/)
-    assert.equal(calls.length, 2, 'tried once each, then reported')
+    await assert.rejects(() => api.deleteRepo('catboy98/13ff'), (error) => {
+      assert.match(error.message, /控制台路由也全部失败/, 'it says the console route failed too')
+      assert.match(error.message, /DELETE api-json（403）/, 'and names each shape with its status')
+      assert.equal(error.body.failures.length, 4, 'all four shapes are reported')
+      return true
+    })
+    assert.equal(calls.length, 5, 'one API call plus four console shapes, then it stops')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+}
+
+// --- case 6: the first console shape that works wins -----------------
+{
+  const calls = withFetch((url) => {
+    if (String(url).startsWith('https://api.cnb.cool/')) return json(403, { errcode: 9, errmsg: 'root group management rules' })
+    // A 400 for the api-json accept, then success for plain json: the order matters,
+    // because a 400 is what the real service answered and the path is right.
+    if (String(url).includes('/-/repos/')) {
+      const isFirst = calls.filter((call) => call.url.includes('/-/repos/')).length === 1
+      return isFirst
+        ? json(400, { errcode: 3, errmsg: 'Invalid argument' })
+        : json(200, { ok: true })
+    }
+    return json(200, { ok: true })
+  })
+  try {
+    const api = new CnbApi({ token: async () => 'tok', api: 'https://api.cnb.cool', web: 'https://cnb.cool', session: async () => 'csrftoken=x' })
+    const result = await api.deleteRepo('catboy98/13ff')
+    assert.deepEqual(result, { ok: true }, 'a later shape succeeding is enough')
   } finally {
     globalThis.fetch = originalFetch
   }
