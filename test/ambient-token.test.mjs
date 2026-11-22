@@ -197,4 +197,69 @@ console.log('ambient-token OK · injected token adopted silently, deliberate cho
   }
 }
 
-console.log('ambient-token: imported secret case added')
+// --- case 7: a token from another repository is placed where it works ---
+{
+  // The pattern this enables: one secret repository holds a token for "k", and every
+  // other repository imports it. Running in "hs" with k's token, the gateway at hs
+  // answers SLUG_ID_NOT_MATCH — so the adoption must keep looking rather than give up on
+  // the first repository, which is what made the imported token useless before.
+  const previousToken = process.env.CNB_TOKEN
+  const previousRepo = process.env.CNB_REPO_SLUG
+  process.env.CNB_TOKEN = 'foreign-token'
+  process.env.CNB_REPO_SLUG = 'acme/host'
+  const { api, records } = harness(signIn())
+  globalThis.fetch = async (url) => {
+    const target = String(url)
+    if (target.includes('/user/repos')) {
+      return json(200, [{ path: 'acme/host' }, { path: 'acme/owner' }, { path: 'acme/other' }])
+    }
+    if (target.includes('/-/ai/chat/completions')) {
+      // Only one repository accepts this token, and it is not the host.
+      if (target.includes('/acme/owner/-/ai')) return sse()
+      return json(403, { errcode: 403, errmsg: '[SLUG_ID_NOT_MATCH]SlugId not match' })
+    }
+    return json(200, {})
+  }
+  try {
+    const result = await api.runOperation('gateway.adoptAmbient', {})
+    assert.equal(result.adopted, true, 'it must find the repository that accepts the token')
+    assert.equal(result.repo, 'acme/owner', 'not the host repository')
+    assert.equal(result.foreign, true, 'and say the token came from elsewhere')
+    assert.equal(records.get('dsh-cnb/gateway-token').payload.repo, 'acme/owner')
+  } finally {
+    if (previousToken === undefined) delete process.env.CNB_TOKEN
+    else process.env.CNB_TOKEN = previousToken
+    if (previousRepo === undefined) delete process.env.CNB_REPO_SLUG
+    else process.env.CNB_REPO_SLUG = previousRepo
+    globalThis.fetch = originalFetch
+  }
+}
+
+// --- case 8: a token no repository accepts is reported with the reason ---
+{
+  const previousToken = process.env.CNB_TOKEN
+  const previousRepo = process.env.CNB_REPO_SLUG
+  process.env.CNB_TOKEN = 'useless-token'
+  process.env.CNB_REPO_SLUG = 'acme/host'
+  const { api, records } = harness(signIn())
+  globalThis.fetch = async (url) => {
+    const target = String(url)
+    if (target.includes('/user/repos')) return json(200, [{ path: 'acme/host' }, { path: 'acme/b' }])
+    if (target.includes('/-/ai/chat/completions')) return json(403, { errcode: 403, errmsg: '[SLUG_ID_NOT_MATCH]SlugId not match' })
+    return json(200, {})
+  }
+  try {
+    const result = await api.runOperation('gateway.adoptAmbient', {})
+    assert.equal(result.adopted, false)
+    assert.ok(result.tried.length >= 2, 'every reachable repository was tried')
+    assert.equal(records.has('dsh-cnb/gateway-token'), false, 'and nothing is stored')
+  } finally {
+    if (previousToken === undefined) delete process.env.CNB_TOKEN
+    else process.env.CNB_TOKEN = previousToken
+    if (previousRepo === undefined) delete process.env.CNB_REPO_SLUG
+    else process.env.CNB_REPO_SLUG = previousRepo
+    globalThis.fetch = originalFetch
+  }
+}
+
+console.log('ambient-token: imported secret and cross-repository cases added')
