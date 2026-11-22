@@ -148,4 +148,51 @@ const noAi = () => json(404, { errcode: 5, errmsg: 'Resource not found.' })
   }
 }
 
+// --- case 7: another account picks its own repository, not a remembered one --
+{
+  // The point: nothing about a previous account may survive into this one. The
+  // repository list comes from the credential's own account, and the choice is made
+  // from that list alone.
+  const otherAccount = [{ path: 'bob/app' }, { path: 'bob/tools' }, { path: 'bob/site' }]
+  const originalInner = globalThis.fetch
+  globalThis.fetch = async (url) => {
+    const target = String(url)
+    if (target.includes('/user/repos')) return json(200, otherAccount)
+    if (target.includes('bob/tools/-/ai')) {
+      return new Response('data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n', {
+        status: 200, headers: { 'content-type': 'text/event-stream' },
+      })
+    }
+    return json(403, { errcode: 403, errmsg: '[SLUG_ID_NOT_MATCH]SlugId not match' })
+  }
+  try {
+    const result = await harness().runOperation('gateway.autopick', {})
+    assert.equal(result.found, true)
+    assert.equal(result.repo, 'bob/tools', 'it must resolve from this account\'s own list')
+    assert.ok(!result.repo.startsWith('acme/'), 'and must not reuse a repository from another account')
+    assert.equal(result.checked, 2)
+  } finally {
+    globalThis.fetch = originalInner
+  }
+}
+
+// --- case 8: an account with nothing usable gets no borrowed answer -------
+{
+  const originalInner = globalThis.fetch
+  globalThis.fetch = async (url) => {
+    const target = String(url)
+    if (target.includes('/user/repos')) return json(200, [{ path: 'carol/x' }, { path: 'carol/y' }])
+    return json(403, { errcode: 403, errmsg: '[NO_RIGHT]OpenAPI only allowed in pipeline' })
+  }
+  try {
+    const result = await harness().runOperation('gateway.autopick', {})
+    assert.equal(result.found, false)
+    assert.equal(result.repo, null, 'no repository is invented for an account that has none working')
+    assert.equal(result.checked, 2, 'it checked exactly this account\'s repositories')
+    assert.equal(result.counts['personal-token'], 2)
+  } finally {
+    globalThis.fetch = originalInner
+  }
+}
+
 console.log('gateway-autopick OK · picks the one that answers, explains why none do')
