@@ -42,11 +42,12 @@ dsh plugin install /path/to/dsh-cnb      # 或在 Web UI 的插件页安装
 手机微信确认后，插件立刻用同一个会话调用 CNB 的令牌接口，按下面这些 scope 创建一个访问令牌：
 
 ```
-repo-basic-info  repo-code  repo-cnb-detail  repo-cnb-history
-repo-manage  repo-delete
-group-resource  group-manage  group-delete
-account-profile
+repo-basic-info   repo-code      repo-cnb-history   repo-cnb-detail
+repo-cnb-trigger  repo-delete
+group-resource    account-profile  account-engage
 ```
+
+这 9 个 scope 正好覆盖面板与工具的每一次调用：`repo-cnb-trigger` 是启动开发环境，`account-engage` 是停止/删除环境，`group-resource` 是组织仓库与用量，`repo-code` 是读 `.cnb/settings.yml` 与调用 AI 网关。`test/scopes.test.mjs` 会拿 CNB 自己的权限表逐个校验，漏一个就红。
 
 令牌明文只出现一次，随后写进 dsh 的凭证库，不落配置文件：
 
@@ -133,7 +134,7 @@ dsh-cnb/
 ## 测试
 
 ```bash
-npm test                      # 离线：mini-yaml、二维码、overlay 回退
+npm test                      # 离线：权限表、mini-yaml、二维码、overlay 回退
 CNB_TOKEN=... npm test        # 追加实网冒烟：仓库、用量、网关、配置写入
 ```
 
