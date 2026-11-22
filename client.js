@@ -300,34 +300,48 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /** How each link kind is presented. */
+    const LINK_LABELS = {
+      webide: 'WebIDE',
+      codebuddy: 'CodeBuddy Web',
+      jump: '跳转页',
+      logs: '流水线日志',
+      repo: '仓库主页',
+      ports: '端口预览',
+    }
+
     /**
-     * Every URL a start result carries, labelled by what it is for.
-     * @param {{ repo: string, branch?: string, sn?: string, url?: string, buildLogUrl?: string, webide?: string, jumpUrl?: string }} started
+     * Normalise links from either source shape.
+     *
+     * The Host's `workspaces.detail` already returns `{ kind, label, url, note }`
+     * covering every entry point — WebIDE, CodeBuddy, the jump page, the log, the
+     * repository, and the port-preview template with its ready-made ports. A start
+     * result carries only the handful CNB answered with, so both are folded here.
+     * @param {{ links?: Array<{kind?: string, label?: string, url: string, note?: string}>, webide?: string, jumpUrl?: string, url?: string, buildLogUrl?: string, repo?: string, sn?: string }} source
      */
-    function startLinks(started) {
-      if (started === null || started === undefined) return []
-      const links = []
-      // CNB spells the same address with and without a trailing slash depending on
-      // which endpoint produced it; treat those as one link.
-      const same = (a, b) => a.replace(/\/+$/, '') === b.replace(/\/+$/, '')
-      const push = (label, url, note) => {
+    function normaliseLinks(source) {
+      if (source === null || source === undefined) return []
+      const rows = []
+      const bare = (value) => String(value).replace(/\/+$/, '')
+      const push = (kind, label, url, note) => {
         if (typeof url !== 'string' || url === '') return
-        if (links.some((link) => same(link.url, url))) return
-        links.push({ label, url, note })
+        if (rows.some((row) => bare(row.url) === bare(url))) return
+        rows.push({ kind, label, url, ...(note === undefined ? {} : { note }) })
       }
-      push('WebIDE 入口', started.webide, started.sn ? `sn ${started.sn}` : undefined)
-      push('跳转页', started.jumpUrl)
-      if (typeof started.webide !== 'string' || started.webide === '') {
-        // A loading page is what CNB returns before the pipeline is up; it is worth
-        // copying, but it must not read as the finished environment.
-        push('启动页（环境就绪前）', started.url, started.message ? '构建中' : undefined)
+      for (const link of source.links ?? []) {
+        push(link.kind ?? 'other', link.label ?? LINK_LABELS[link.kind] ?? '链接', link.url, link.note)
       }
-      push('流水线日志', started.buildLogUrl)
-      if (started.sn) {
-        push('环境详情', `https://cnb.cool/${started.repo}/-/workspace/vscode-web/${started.sn}`)
+      // A start result has not gone through workspaces.detail, so fill in the rest.
+      if ((source.links ?? []).length === 0) {
+        push('webide', 'WebIDE', source.webide)
+        push('jump', '跳转页', source.jumpUrl)
+        if (typeof source.webide !== 'string' || source.webide === '') {
+          push('loading', '启动页（环境就绪前）', source.url, source.message ? '构建中' : undefined)
+        }
+        push('logs', '流水线日志', source.buildLogUrl)
+        if (source.repo) push('repo', '仓库主页', `https://cnb.cool/${source.repo}`)
       }
-      push('仓库主页', `https://cnb.cool/${started.repo}`)
-      return links
+      return rows
     }
 
     /** One line: how much of the panel actually works. */
@@ -749,7 +763,7 @@ window.__ModuleLoader__.load({
                   ? undefined
                   : async () => {
                       const detail = await callApi('workspaces.detail', { repo: links.repo, sn: links.sn }).catch(() => null)
-                      const resolved = startLinks({ repo: links.repo, sn: links.sn, webide: detail?.detail?.webide, jumpUrl: detail?.detail?.jumpUrl, url: links.rows.find((r) => r.label === '开发环境地址')?.url })
+                      const resolved = normaliseLinks(detail ?? {})
                       setLinks({ ...links, rows: resolved, starting: typeof detail?.detail?.webide !== 'string' })
                     },
             }),
@@ -807,7 +821,7 @@ window.__ModuleLoader__.load({
                                 const started = await callApi('workspaces.open', { repo: repo.slug })
                                 setLinks({
                                   title: `${repo.slug} · 启动结果`,
-                                  rows: startLinks(started),
+                                  rows: normaliseLinks(started),
                                   repo: repo.slug,
                                   sn: started.sn,
                                   starting: typeof started.webide !== 'string' || started.webide === '',
@@ -932,14 +946,9 @@ window.__ModuleLoader__.load({
           setActionError(null)
           try {
             const result = await callApi('workspaces.detail', { repo: slug, sn })
-            const detail = result?.detail ?? {}
-            const rows = startLinks({
-              repo: slug,
-              sn,
-              webide: detail.webide,
-              jumpUrl: detail.jumpUrl,
-              url: detail.webide === undefined && detail.jumpUrl === undefined ? undefined : undefined,
-            })
+            // workspaces.detail returns every entry point: WebIDE, CodeBuddy, the
+            // jump page, the log, the repository, and port previews.
+            const rows = normaliseLinks(result ?? {})
             if (rows.length === 0) throw new Error('该环境暂无可用地址')
             setLinks({ title: `${slug} · ${sn}`, rows, repo: slug, sn, starting: false })
           } catch (error) {
@@ -970,7 +979,7 @@ window.__ModuleLoader__.load({
                       const detail = await callApi('workspaces.detail', { repo: links.repo, sn: links.sn }).catch(() => null)
                       setLinks({
                         ...links,
-                        rows: startLinks({ repo: links.repo, sn: links.sn, webide: detail?.detail?.webide, jumpUrl: detail?.detail?.jumpUrl }),
+                        rows: normaliseLinks(detail ?? {}),
                         starting: typeof detail?.detail?.webide !== 'string',
                       })
                     },
@@ -1069,7 +1078,7 @@ window.__ModuleLoader__.load({
                     const started = await callApi('workspaces.open', { repo: repo.trim() })
                     setLinks({
                       title: `${repo.trim()} · 启动结果`,
-                      rows: startLinks(started),
+                      rows: normaliseLinks(started),
                       repo: repo.trim(),
                       sn: started.sn,
                       starting: typeof started.webide !== 'string' || started.webide === '',

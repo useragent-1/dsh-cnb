@@ -161,6 +161,35 @@ CNB 的创建接口对一份"授予不了任何权限"的 scope 也返回成功�
 
 地址按去掉尾部斜杠去重，`vscode-web/cnb-1/` 和 `vscode-web/cnb-1` 只出现一次。
 
+### 一个环境有七类入口
+
+`workspace/detail` 只返回两条（WebIDE、跳转页），但一个环境实际有这些：
+
+| 入口 | 形态 | 说明 |
+|---|---|---|
+| **WebIDE** | `<web>/<repo>/-/workspace/vscode-web/<pipelineId>/` | 编辑器 |
+| **CodeBuddy Web** | `<web>/<repo>/-/workspace/codebuddy/<pipelineId>/` | 浏览器里的 AI 编码 |
+| **跳转页** | `<web>/<repo>/-/workspace/jump?pipelineId=<pipelineId>` | 环境状态页 |
+| **端口预览模板** | `https://<prefix>-{{port}}.cnb.run` | 把 `{{port}}` 换成实际端口 |
+| **端口预览 3000/5173/8080/8000/5000** | 同上 | 直接可用的常见端口 |
+| **流水线日志** | `<web>/<repo>/-/build/logs/<pipelineId>` | 构建日志 |
+| **仓库主页** | `<web>/<repo>` | — |
+
+**端口预览**最容易漏，但它往往是最需要的：开发环境里起的服务在浏览器里打不开本地端口，只能通过这个域名访问，而且服务必须监听 `0.0.0.0`。
+
+### 两种 sn 不能混用
+
+CNB 对同一个环境有两种叫法，混用就 404：
+
+- `workspace/detail` 只认**短 sn**：`cnb-lod-1k81349st`
+- 链接路径里要用**流水线 id**：`cnb-lod-1k81349st-001`
+
+插件在调用前把带后缀的 sn 归一化成短的，构造链接时再用带后缀的。
+
+### 端口预览前缀只属于它自己的环境
+
+前缀（如 `iti87odsrp`）由 CNB 按环境分配，只在环境内部通过 `CNB_VSCODE_PROXY_URI` 暴露。插件**只在本机所在的那个仓库**上使用它，对别的仓库不填——否则会生成一个看起来正确、实际返回 500 的链接。其他仓库需要时显式传 `proxyDomain`。
+
 刚启动时流水线还没跑完，CNB 只给得出 loading 页、`webide` 还是空的。卡片会显示「刷新地址（环境就绪后）」，点一下重新向 `workspace/detail` 取真实入口，等环境起来就能拿到可直接用的 WebIDE 地址。
 
 启动环境时 `branch` 是必填的（CNB 对空 body 直接答 `[PARAM_MISS]branch is required`，只给 `ref` 也不行）。所以省略 branch 时插件自己解析：仓库对象**没有** `default_branch` 字段，于是读取分支列表，优先 `main`、其次 `master`、否则取第一个。显式给了 branch 就完全不做这次查询。
