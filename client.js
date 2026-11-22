@@ -194,6 +194,15 @@ window.__ModuleLoader__.load({
       return { ...state, reload }
     }
 
+    /** Service names the doctor reports, in the panel's own words. */
+    const CHECK_LABELS = {
+      identity: '账号身份',
+      repositories: '仓库列表',
+      organizations: '组织列表',
+      quota: '组织额度与用量',
+      workspaces: '云原生开发环境',
+    }
+
     // ------------------------------------------------------------------- tabs
 
     function AccountTab({ status, onRefresh }) {
@@ -202,6 +211,8 @@ window.__ModuleLoader__.load({
       const [attempt, setAttempt] = useState(status?.pending ?? null)
       const [message, setMessage] = useState(null)
       const [tokenValue, setTokenValue] = useState('')
+      const [doctor, setDoctor] = useState(null)
+      const [doctorBusy, setDoctorBusy] = useState(false)
       const timer = useRef(null)
 
       const stopPolling = useCallback(() => {
@@ -219,7 +230,16 @@ window.__ModuleLoader__.load({
           if (result.state === 'confirmed') {
             stopPolling()
             setAttempt(null)
-            setMessage(`已登录：${result.login?.user?.nickname ?? result.login?.user?.username ?? 'CNB 账号'}`)
+            const who = result.login?.user?.nickname ?? result.login?.user?.username ?? 'CNB 账号'
+            const check = result.verification
+            if (check !== null && check !== undefined && !check.ok) {
+              setError(
+                `已登录 ${who}，但签出的令牌仍缺少权限：${(check.missingScopes ?? []).join('、') || '未知' }。` +
+                  '请在 CNB 令牌页确认账号本身拥有这些权限，或改用「粘贴令牌」导入一个已确认可用的令牌。',
+              )
+            } else {
+              setMessage(`已登录：${who}${check?.ok ? '，权限自检通过' : ''}`)
+            }
             onRefresh()
           } else if (result.state === 'expired') {
             stopPolling()
@@ -265,6 +285,18 @@ window.__ModuleLoader__.load({
           setBusy(false)
         }
       }, [onRefresh, stopPolling])
+
+      const runDoctor = useCallback(async () => {
+        setDoctorBusy(true)
+        setError(null)
+        try {
+          setDoctor(await callApi('token.doctor', {}))
+        } catch (doctorError) {
+          setError(doctorError.message)
+        } finally {
+          setDoctorBusy(false)
+        }
+      }, [])
 
       const importToken = useCallback(async () => {
         if (tokenValue.trim() === '') return
@@ -329,6 +361,61 @@ window.__ModuleLoader__.load({
                 h('button', { className: 'dcnb-btn', 'data-tone': 'primary', onClick: begin, disabled: busy }, busy ? '处理中…' : '扫码登录'),
               ),
         ),
+        status?.health === 'no-permission'
+          ? h(
+              Banner,
+              { tone: 'error' },
+              `已保存令牌，但 CNB 判定它没有任何权限${status.healthDetail ? `：${status.healthDetail}` : ''}。` +
+                '常见原因是令牌按不带级别的授权项创建（CNB 会丢弃这种授权）。点下面的「重新扫码」拿到全权限令牌。',
+            )
+          : null,
+        status?.loggedIn
+          ? h(
+              Card,
+              {
+                title: '令牌自检',
+                extra: h('button', { className: 'dcnb-btn', disabled: doctorBusy, onClick: runDoctor }, doctorBusy ? '检测中…' : '检测权限'),
+              },
+              doctor === null
+                ? h('p', { className: 'dcnb-muted', style: { margin: 0 } }, '逐个探测面板用到的接口，指出缺哪个权限项。')
+                : h(
+                    React.Fragment,
+                    null,
+                    h(
+                      'div',
+                      { className: 'dcnb-list' },
+                      (doctor.checks ?? []).map((check) =>
+                        h(
+                          'div',
+                          { key: check.name, className: 'dcnb-item' },
+                          h(
+                            'div',
+                            { className: 'dcnb-main' },
+                            h(
+                              'div',
+                              { className: 'dcnb-title' },
+                              h('span', null, CHECK_LABELS[check.name] ?? check.name),
+                              h(
+                                'span',
+                                { className: 'dcnb-tag', 'data-tone': check.ok ? 'ok' : 'err' },
+                                check.ok ? '可用' : '受限',
+                              ),
+                            ),
+                            h(
+                              'div',
+                              { className: 'dcnb-mono', style: { marginTop: 2, wordBreak: 'break-all' } },
+                              check.ok ? JSON.stringify(check.value) : check.error,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    doctor.hint === null || doctor.hint === undefined
+                      ? null
+                      : h(Banner, { tone: doctor.healthy ? 'ok' : 'error' }, doctor.hint),
+                  ),
+            )
+          : null,
         attempt
           ? h(
               Card,

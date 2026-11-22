@@ -98,7 +98,14 @@ assert.equal(provider.api, 'openai-completions')
 assert.equal(provider.apiKeyEnv, 'CNB_TOKEN')
 assert.deepEqual(entries[1].options.config, { provider: 'cnb-gateway', model: 'deepseek-v4.1-flash' })
 
-assert.equal(tools.size, 13, 'every documented tool must register')
+assert.equal(tools.size, 15, 'every documented tool must register')  // 15 cnb_* tools
+for (const name of ['cnb_token_doctor', 'cnb_login_scopes']) assert.ok(tools.has(name), `${name} must register`)
+
+// The doctor must name the scope a token is missing, not just fail.
+const doctor = await api.runOperation('token.doctor', {})
+assert.equal(doctor.signedIn, true)
+assert.ok(Array.isArray(doctor.checks) && doctor.checks.length === 5)
+for (const check of doctor.checks) assert.equal(typeof check.name, 'string')
 assert.ok(routes.has('/dsh-cnb/api'))
 
 console.log(`smoke OK · ${repos.total} repos · ${usage.groups.length} orgs · gateway ${probe.model} answered`)

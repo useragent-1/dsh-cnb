@@ -24,7 +24,7 @@ CNB（[cnb.cool](https://cnb.cool)）接入 DeepSeek​ Harness 的插件：扫�
 dsh plugin install /path/to/dsh-cnb      # 或在 Web UI 的插件页安装
 ```
 
-装好后侧边栏出现 **CNB** 图标，同时注册 13 个 `cnb_*` 工具。配置项只有一个可选的覆盖点，写在 `cordis.patch.yml` 里：
+装好后侧边栏出现 **CNB** 图标，同时注册 15 个 `cnb_*` 工具。配置项只有一个可选的覆盖点，写在 `cordis.patch.yml` 里：
 
 ```yaml
 - id: dsh-cnb
@@ -41,13 +41,28 @@ dsh plugin install /path/to/dsh-cnb      # 或在 Web UI 的插件页安装
 
 手机微信确认后，插件立刻用同一个会话调用 CNB 的令牌接口，按下面这些 scope 创建一个访问令牌：
 
+**全部 26 项权限**，每项都取它能授予的最高级别，由 CNB 自己的 `GET /config/token/scope` 表在扫码时现取现算，不写死：
+
 ```
-repo-basic-info   repo-code      repo-cnb-history   repo-cnb-detail
-repo-cnb-trigger  repo-delete
-group-resource    account-profile  account-engage
+repo-code:rw  repo-pr:rw  repo-issue:rw  repo-notes:rw  repo-release:rw
+repo-commit-status:rw  repo-cnb-trigger:rw  repo-cnb-history:r
+repo-cnb-detail:rw  repo-basic-info:r  repo-manage:rw  repo-delete:rw
+repo-security:r  registry-package:rw  registry-package-delete:rw
+registry-security:r  registry-manage:rw  registry-delete:rw
+account-profile:rw  account-email:r  account-engage:rw
+group-resource:rw  group-manage:rw  group-delete:rw
+mission-delete:rw  mission-manage:rw
 ```
 
-这 9 个 scope 正好覆盖面板与工具的每一次调用：`repo-cnb-trigger` 是启动开发环境，`account-engage` 是停止/删除环境，`group-resource` 是组织仓库与用量，`repo-code` 是读 `.cnb/settings.yml` 与调用 AI 网关。`test/scopes.test.mjs` 会拿 CNB 自己的权限表逐个校验，漏一个就红。
+**级别后缀是必须的。** CNB 的授权项写法是 `<group>-<code>:<level>`。只发 `repo-code`（不带 `:r`/`:rw`）时，创建接口不会报错，但签出的令牌**不含任何有效权限**——之后每个调用都返回 `10023`，看起来就像账号没有权限。这就是为什么列表要现取现算，并且 `test/scopes.test.mjs` 会逐项断言级别存在且合法。
+
+想只授权这个插件用到的部分，把 `profile` 换成 `plugin`：11 项，覆盖仓库、组织、身份与环境控制，不含制品库与任务集。
+
+### 令牌自检
+
+「账号」页有 **检测权限** 按钮（工具 `cnb_token_doctor`），逐个探测面板实际用到的接口：身份、仓库、组织、额度用量、开发环境，每次都单独报告结果和缺的 scope。扫码成功后也会自动跑一遍自检——如果签出的令牌仍然缺权限，面板直接告诉你缺哪些，而不是让你对着空列表猜。
+
+自检能区分三种情况：令牌无效（CNB 不接受）、令牌有效但缺权限项、一切正常。
 
 令牌明文只出现一次，随后写进 dsh 的凭证库，不落配置文件：
 
@@ -111,6 +126,8 @@ Authorization: Bearer <CNB token>
 | `cnb_usage` | `slug` `month` | 组织额度与用量 |
 | `cnb_gateway_probe` | `repo` `model` `prompt` | 网关真实调用 |
 | `cnb_gateway_configure` | `repo` `route` `model` `makeDefault` | 写入 `llm-pi-ai` 路由 |
+| `cnb_login_scopes` | — | 列出 CNB 可授权的权限项及级别 |
+| `cnb_token_doctor` | — | 逐接口探测令牌能做什么、缺哪个权限项 |
 
 ## 实现要点
 
@@ -134,7 +151,7 @@ dsh-cnb/
 ## 测试
 
 ```bash
-npm test                      # 离线：权限表、mini-yaml、二维码、overlay 回退
+npm test                      # 离线：权限表与级别、扫码状态机、自检、mini-yaml、二维码、overlay
 CNB_TOKEN=... npm test        # 追加实网冒烟：仓库、用量、网关、配置写入
 ```
 

@@ -1,65 +1,68 @@
 /**
- * The minted token must carry every scope the plugin's own calls need.
+ * Scope handling, checked against CNB's own permission table.
  *
- * Two failure modes are easy to ship and invisible until a user clicks:
- *  - a scope the console does not recognize (the mint simply omits it), and
- *  - a scope that exists but names the wrong permission group.
- *
- * The console's own `GET /config/token/scope` is the authority; this suite reads
- * it live and asserts every requested scope is in it, plus a table of the exact
- * scope each endpoint demands. Needs no token: the scope table is public.
+ * The bug this suite exists for: a scope is `"<group>-<code>:<level>"`. Sending
+ * the bare name is accepted by the mint and yields a token with no permissions,
+ * so the panel shows "logged in" over an empty repository list. Every assertion
+ * here is about the level being present and valid.
  */
 import assert from 'node:assert/strict'
-import { DEFAULT_TOKEN_SCOPES, extractMissingScopes } from '../lib/cnb-client.js'
+import {
+  fetchScopeTable,
+  fullScopes,
+  normalizeScopes,
+  pluginScopes,
+  resolveScopes,
+  resetScopeTableCache,
+  PLUGIN_SCOPES,
+} from '../lib/scopes.js'
 
-const response = await fetch('https://cnb.cool/config/token/scope', { headers: { accept: 'application/json' } })
-assert.equal(response.ok, true, 'the public scope table must be readable')
-const table = await response.json()
-const valid = new Set()
-for (const group of table.config ?? []) {
-  for (const code of group.codes ?? []) valid.add(`${group.group}-${code.code}`)
-}
-assert.ok(valid.size > 10, 'the scope table must enumerate permissions')
-
-for (const scope of DEFAULT_TOKEN_SCOPES) {
-  assert.ok(valid.has(scope), `requested scope "${scope}" is not a permission the console can grant`)
-}
-
-// Endpoint → the scope CNB actually enforces, taken from the OpenAPI security
-// notes and confirmed against live 10023 responses.
-const required = new Map([
-  ['GET /{repo}', 'repo-basic-info'],
-  ['GET /{repo}/-/git/contents/{file_path}', 'repo-code'],
-  ['POST /{repo}/-/ai/chat/completions', 'repo-code'],
-  ['GET /{repo}/-/build/logs', 'repo-cnb-history'],
-  ['GET /{repo}/-/workspace/detail/{sn}', 'repo-cnb-detail'],
-  ['POST /{repo}/-/workspace/start', 'repo-cnb-trigger'],
-  ['DELETE /{repo}', 'repo-delete'],
-  ['POST /{slug}/-/repos', 'group-resource'],
-  ['GET /{slug}/-/charge/volume', 'group-resource'],
-  ['GET /user', 'account-profile'],
-  ['POST /workspace/stop', 'account-engage'],
-  ['POST /workspace/delete', 'account-engage'],
-])
-for (const [endpoint, scope] of required) {
-  assert.ok(DEFAULT_TOKEN_SCOPES.includes(scope), `${endpoint} needs "${scope}", which the mint must request`)
+resetScopeTableCache()
+const table = await fetchScopeTable({ force: true })
+assert.ok(table.length >= 20, 'the scope table must enumerate the platform permissions')
+for (const entry of table) {
+  assert.match(entry.scope, /^[a-z][a-z0-9]*-[a-z][a-z0-9-]*$/, `bad scope name ${entry.scope}`)
+  assert.ok(entry.levels.length > 0, `${entry.scope} must publish at least one level`)
 }
 
-// A 10023 message must surface the scope it names.
-assert.deepEqual(
-  extractMissingScopes("The token's authorization scope does not match this request. Missing required scopes: account-engage:rw"),
-  ['account-engage:rw'],
-)
-assert.deepEqual(extractMissingScopes('some other failure'), [])
-// The plugin wraps the service text with its own errcode suffix; the scope must
-// still come out clean.
-assert.deepEqual(
-  extractMissingScopes('Missing required scopes: group-resource:rw (errcode 10023)'),
-  ['group-resource:rw'],
-)
-assert.deepEqual(
-  extractMissingScopes('Missing required scopes: a-b:r, c-d:rw'),
-  ['a-b:r', 'c-d:rw'],
-)
+// Full profile: every permission, each at its strongest published level.
+const full = fullScopes(table)
+assert.equal(full.length, table.length)
+for (const scope of full) {
+  const at = scope.lastIndexOf(':')
+  assert.notEqual(at, -1, `${scope} must carry a level`)
+  const name = scope.slice(0, at)
+  const level = scope.slice(at + 1)
+  const entry = table.find((row) => row.scope === name)
+  assert.ok(entry, `${name} must come from the table`)
+  assert.ok(entry.levels.includes(level), `${name} does not publish level ${level}`)
+  if (entry.levels.includes('rw')) assert.equal(level, 'rw', `${name} must be requested at rw`)
+}
 
-console.log(`scopes OK · ${DEFAULT_TOKEN_SCOPES.length} requested · ${valid.size} grantable · ${required.size} endpoints mapped`)
+// The level-less list that caused the outage must not survive normalization.
+const repaired = normalizeScopes(PLUGIN_SCOPES, table)
+assert.deepEqual(repaired.dropped, [], 'every plugin permission must exist')
+for (const scope of repaired.scopes) assert.match(scope, /:[a-z]+$/)
+assert.ok(repaired.scopes.includes('repo-code:rw'))
+assert.ok(repaired.scopes.includes('account-engage:rw'), 'workspace stop/delete need this')
+assert.ok(repaired.scopes.includes('repo-cnb-trigger:rw'), 'workspace start needs this')
+assert.ok(repaired.scopes.includes('group-resource:rw'), 'repo create and usage need this')
+
+// An explicit level is respected when the code publishes it, upgraded otherwise.
+assert.deepEqual(normalizeScopes(['repo-code:r'], table).scopes, ['repo-code:r'])
+assert.deepEqual(normalizeScopes(['repo-code:bogus'], table).scopes, ['repo-code:rw'])
+// An unknown permission is dropped rather than sent as a powerless grant.
+const unknown = normalizeScopes(['repo-code:r', 'repo-nonsense:rw'], table)
+assert.deepEqual(unknown.scopes, ['repo-code:r'])
+assert.deepEqual(unknown.dropped, ['repo-nonsense:rw'])
+
+// Plugin profile is a strict subset of the full one.
+const plugin = pluginScopes(table)
+assert.ok(plugin.length > 0)
+for (const scope of plugin) assert.ok(full.includes(scope), `${scope} must also be in the full profile`)
+
+// resolveScopes is the entry point the mint uses.
+assert.deepEqual(await resolveScopes({ profile: 'full' }), full)
+assert.deepEqual(await resolveScopes({ profile: 'plugin' }), plugin)
+
+console.log(`scopes OK · ${table.length} permissions · full=${full.length} · plugin=${plugin.length}`)

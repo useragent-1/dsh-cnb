@@ -15,6 +15,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 const suites = [
   ['scopes', 'scopes.test.mjs', false],
   ['login-state', 'login-state.test.mjs', false],
+  ['doctor', 'doctor.test.mjs', false],
   ['mini-yaml', 'mini-yaml.test.mjs', false],
   ['qr', 'qr.test.mjs', false],
   ['gateway-overlay', 'gateway-overlay.test.mjs', false],
