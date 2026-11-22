@@ -236,12 +236,19 @@ window.__ModuleLoader__.load({
             const who = result.login?.user?.nickname ?? result.login?.user?.username ?? 'CNB 账号'
             const check = result.verification
             if (check !== null && check !== undefined && !check.ok) {
+              // Every profile was tried and none produced a usable token. Say that,
+              // and say what was asked for, so this reads as a platform-side limit
+              // rather than a silent success.
+              const attempts = (result.tried ?? []).map((entry) => entry.profile).join(' → ')
               setError(
-                `已登录 ${who}，但签出的令牌仍缺少权限：${(check.missingScopes ?? []).join('、') || '未知' }。` +
-                  '请在 CNB 令牌页确认账号本身拥有这些权限，或改用「粘贴令牌」导入一个已确认可用的令牌。',
+                `已登录 ${who}，但签出的令牌都无法读取账号（已依次尝试：${attempts || '全权限'}）。` +
+                  '这说明账号角色限制了可授予的权限，不是令牌格式问题。' +
+                  '请在 CNB 令牌页确认账号在这些组织里的角色，或直接粘贴一个能用的令牌。',
               )
             } else {
-              setMessage(`已登录：${who}${check?.ok ? '，权限自检通过' : ''}`)
+              const profile = result.login?.scopeProfile
+              const label = profile === 'full' ? '全权限' : profile === 'plugin' ? '插件所需权限' : profile ? '最小权限' : '权限'
+              setMessage(`已登录：${who}，已取得${label}令牌，自检通过`)
             }
             onRefresh()
           } else if (result.state === 'expired') {
