@@ -31,15 +31,34 @@ window.__ModuleLoader__.load({
 .dcnb-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
 .dcnb-muted{color:var(--dsw-alias-label-secondary)}
 .dcnb-mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
-.dcnb-btn{appearance:none;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;padding:6px 12px;border-radius:8px;cursor:pointer}
-.dcnb-btn:hover{background:var(--dsw-alias-bg-overlay)}
-.dcnb-btn[data-tone=primary]{background:var(--dsw-alias-brand-primary);border-color:transparent;color:#fff}
-.dcnb-btn[data-tone=danger]{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}
-.dcnb-btn:disabled{opacity:.5;cursor:default}
+/* Buttons never read as blank white: the fill is a tinted surface, the border
+   carries the tone, and the label keeps contrast in both themes. */
+.dcnb-btn{appearance:none;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:1.4;padding:6px 12px;border-radius:8px;cursor:pointer;transition:background .15s ease,border-color .15s ease,color .15s ease}
+.dcnb-btn:hover{background:var(--dsw-alias-interactive-bg-hover-accent);border-color:var(--dsw-alias-border-l3)}
+.dcnb-btn:active{background:var(--dsw-alias-interactive-bg-active)}
+.dcnb-btn[data-tone=primary]{background:var(--dsw-alias-button-info-fill);border-color:transparent;color:#fff;font-weight:500;box-shadow:0 1px 2px #00000014}
+.dcnb-btn[data-tone=primary]:hover{background:var(--dsw-alias-button-info-hover)}
+.dcnb-btn[data-tone=danger]{border-color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 45%,transparent);color:var(--dsw-alias-state-error-primary);background:var(--dsw-alias-interactive-bg-hover-danger)}
+.dcnb-btn[data-tone=danger]:hover{background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 16%,transparent)}
+.dcnb-btn:disabled{opacity:.45;cursor:default}
+.dcnb-btn:focus-visible{outline:2px solid var(--dsw-alias-button-info-fill);outline-offset:2px}
 .dcnb-input,.dcnb-select{box-sizing:border-box;font:inherit;font-size:12px;padding:6px 10px;border-radius:8px;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);min-width:0}
 .dcnb-input{flex:1}
-.dcnb-qr{display:grid;place-items:center;padding:14px;background:#fff;border-radius:12px;width:fit-content}
+/* The QR sits on white in both themes: a code drawn in the panel's text colour is
+   unscannable on a dark surface. */
+.dcnb-qr{display:grid;place-items:center;padding:16px;background:#fff;border-radius:14px;width:fit-content;box-shadow:0 2px 10px #0000001a;margin:0 auto}
 .dcnb-qr svg{display:block}
+
+.dcnb-login{display:flex;flex-direction:column;align-items:center;gap:16px;padding:8px 0 4px;max-width:420px;margin:0 auto;text-align:center}
+.dcnb-login-head{display:flex;flex-direction:column;align-items:center;gap:6px}
+.dcnb-login-head h3{margin:0;font-size:15px;font-weight:600}
+.dcnb-login-head p{margin:0;font-size:12px;line-height:1.6;color:var(--dsw-alias-label-secondary);max-width:34ch}
+.dcnb-login-mark{display:grid;place-items:center;width:52px;height:52px;border-radius:15px;color:var(--dsw-alias-button-info-fill);background:color-mix(in srgb,var(--dsw-alias-button-info-fill) 12%,transparent);border:1px solid color-mix(in srgb,var(--dsw-alias-button-info-fill) 28%,transparent)}
+.dcnb-qr-placeholder{display:grid;place-items:center;width:180px;height:180px;border-radius:14px;border:1px dashed var(--dsw-alias-border-l2);color:var(--dsw-alias-label-caption);background:var(--dsw-alias-interactive-bg-hover)}
+.dcnb-login-actions{display:flex;flex-direction:column;align-items:center;gap:6px;width:100%}
+.dcnb-btn-lg{padding:9px 26px;font-size:13px;border-radius:10px;min-width:180px}
+.dcnb-login-notes{list-style:none;margin:2px 0 0;padding:0;display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--dsw-alias-label-caption)}
+.dcnb-login-notes li::before{content:'·';margin-right:6px;opacity:.6}
 .dcnb-banner{display:flex;gap:8px;align-items:flex-start;padding:8px 10px;border-radius:8px;font-size:12px;border:1px solid var(--dsw-alias-border-l1)}
 .dcnb-banner[data-tone=error]{color:var(--dsw-alias-state-error-primary);border-color:var(--dsw-alias-state-error-primary)}
 .dcnb-banner[data-tone=ok]{color:var(--dsw-alias-state-success-primary);border-color:var(--dsw-alias-state-success-primary)}
@@ -226,6 +245,68 @@ window.__ModuleLoader__.load({
       } catch {
         // Quota or a disabled store only costs persistence, not the feature.
       }
+    }
+
+    /**
+     * The signed-out card: invitation, QR, and one clear primary action, centred.
+     *
+     * Laid out as a single column with a measured width so it reads as a deliberate
+     * sign-in surface rather than a paragraph with a button under it. The QR sits on
+     * a light tile because a dark-on-dark code cannot be scanned.
+     */
+    function LoginPanel({ status, busy, attempt, error, onBegin }) {
+      const scanning = attempt !== null && attempt !== undefined
+      return h(
+        'div',
+        { className: 'dcnb-login' },
+        h(
+          'div',
+          { className: 'dcnb-login-head' },
+          h('div', { className: 'dcnb-login-mark', 'aria-hidden': 'true' }, h(QrMark)),
+          h('h3', null, scanning ? '等待手机确认' : '登录 CNB'),
+          h(
+            'p',
+            null,
+            status?.ambientToken
+              ? '检测到环境变量 CNB_TOKEN，但尚未在此插件中登录。扫码后会写入凭证记录并接管。'
+              : '用微信扫描下方二维码。确认后插件会自动创建访问令牌并存入本机凭证库。',
+          ),
+        ),
+        scanning
+          ? h(QrCode, { qr: attempt.qr })
+          : h('div', { className: 'dcnb-qr-placeholder', 'aria-hidden': 'true' }, h(QrMark)),
+        h(
+          'div',
+          { className: 'dcnb-login-actions' },
+          h(
+            'button',
+            { className: 'dcnb-btn dcnb-btn-lg', 'data-tone': 'primary', onClick: onBegin, disabled: busy },
+            busy ? '正在准备二维码…' : scanning ? '重新生成二维码' : '扫码登录',
+          ),
+          scanning
+            ? h('span', { className: 'dcnb-muted', style: { fontSize: 11 } }, '二维码约 4 分钟内有效')
+            : null,
+        ),
+        error === null || error === undefined ? null : h(Banner, null, error),
+        h(
+          'ul',
+          { className: 'dcnb-login-notes' },
+          h('li', null, '令牌保存在本机凭证库，面板不再展示明文'),
+          h('li', null, '登录会话会一并保存，令牌过期可自动重签'),
+        ),
+      )
+    }
+
+    /** A small QR glyph for the empty state, drawn with CSS-free inline SVG. */
+    function QrMark() {
+      return h(
+        'svg',
+        { width: 34, height: 34, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' },
+        h('rect', { x: 3, y: 3, width: 7, height: 7, rx: 1.5 }),
+        h('rect', { x: 14, y: 3, width: 7, height: 7, rx: 1.5 }),
+        h('rect', { x: 3, y: 14, width: 7, height: 7, rx: 1.5 }),
+        h('path', { d: 'M14 14h3v3h-3zM20 14v.01M14 20v.01M20 20v.01' }),
+      )
     }
 
     /**
@@ -693,18 +774,7 @@ window.__ModuleLoader__.load({
                   h('button', { className: 'dcnb-btn', 'data-tone': 'danger', onClick: logout, disabled: busy }, '退出登录'),
                 ),
               )
-            : h(
-                React.Fragment,
-                null,
-                h(
-                  'p',
-                  { className: 'dcnb-muted', style: { margin: '0 0 10px' } },
-                  status?.ambientToken
-                    ? '检测到环境变量 CNB_TOKEN，但尚未在本插件登录；扫码后可写入凭证记录并接管。'
-                    : '使用微信扫码登录 CNB。扫码确认后插件会自动创建访问令牌并保存到本机凭证库，不再展示明文。',
-                ),
-                h('button', { className: 'dcnb-btn', 'data-tone': 'primary', onClick: begin, disabled: busy }, busy ? '处理中…' : '扫码登录'),
-              ),
+            : h(LoginPanel, { status, busy, attempt, error, onBegin: begin }),
         ),
         status?.health === 'no-permission'
           ? h(
@@ -737,40 +807,30 @@ window.__ModuleLoader__.load({
                 : h(DoctorReport, { doctor }),
             )
           : null,
-        attempt
-          ? h(
-              Card,
-              { title: '用微信扫码' },
-              h(
-                'div',
-                { className: 'dcnb-row', style: { alignItems: 'flex-start' } },
-                h(QrCode, { qr: attempt.qr }),
-                h(
-                  'div',
-                  { style: { flex: 1, minWidth: 180 } },
-                  h('p', { className: 'dcnb-muted', style: { margin: '0 0 8px' } }, '在微信中扫码，并在手机上确认登录；本面板每 2 秒自动轮询一次。'),
-                  h('p', { className: 'dcnb-mono', style: { margin: '0 0 8px', wordBreak: 'break-all' } }, attempt.ticketUrl ?? ''),
-                  h('button', { className: 'dcnb-btn', onClick: begin, disabled: busy }, '换一张二维码'),
-                ),
-              ),
-            )
-          : null,
         h(
           Card,
           { title: '已有访问令牌？' },
           h(
             'div',
-            { className: 'dcnb-row' },
-            h('input', {
-              className: 'dcnb-input',
-              type: 'password',
-              placeholder: '粘贴 CNB 访问令牌（https://cnb.cool/profile/token）',
-              value: tokenValue,
-              onChange: (event) => setTokenValue(event.target.value),
-            }),
-            h('button', { className: 'dcnb-btn', onClick: importToken, disabled: busy || tokenValue.trim() === '' }, '导入'),
+            { className: 'dcnb-login' },
+            h(
+              'div',
+              { className: 'dcnb-row', style: { width: '100%' } },
+              h('input', {
+                className: 'dcnb-input',
+                type: 'password',
+                placeholder: '粘贴 CNB 访问令牌',
+                value: tokenValue,
+                onChange: (event) => setTokenValue(event.target.value),
+              }),
+              h('button', { className: 'dcnb-btn', onClick: importToken, disabled: busy || tokenValue.trim() === '' }, '导入'),
+            ),
+            h(
+              'p',
+              { className: 'dcnb-muted', style: { margin: 0, fontSize: 11, lineHeight: 1.6 } },
+              '在 cnb.cool/profile/token 创建。令牌存入 dsh 凭证库，不会写进 cordis.patch.yml。',
+            ),
           ),
-          h('p', { className: 'dcnb-muted', style: { margin: '8px 0 0' } }, '令牌保存在 dsh 的凭证库中，不会写进 cordis.patch.yml。'),
         ),
       )
     }
