@@ -125,7 +125,10 @@ window.__ModuleLoader__.load({
       if (seconds < 60) return `${seconds}s`
       const minutes = Math.floor(seconds / 60)
       if (minutes < 60) return `${minutes}m${seconds % 60}s`
-      return `${Math.floor(minutes / 60)}h${minutes % 60}m`
+      const hours = Math.floor(minutes / 60)
+      if (hours < 48) return `${hours}h${minutes % 60}m`
+      // A session lifetime is measured in days, so do not report "168h".
+      return `${Math.floor(hours / 24)}d${hours % 24}h`
     }
 
     function formatMetric(metric, value) {
@@ -223,6 +226,35 @@ window.__ModuleLoader__.load({
       } catch {
         // Quota or a disabled store only costs persistence, not the feature.
       }
+    }
+
+    /**
+     * Session lifetimes offered at sign-in. CNB's own default is 7 days
+     * (`WECHAT_DEFAULT_LOGIN_DAYS`), and its confirmation step takes the choice as
+     * `login_days`.
+     */
+    const LOGIN_DAY_CHOICES = [1, 7, 30, 90]
+
+    /**
+     * One line describing the stored session's lifetime.
+     *
+     * The cookie CNB sets is opaque, so the lifespan is the one chosen at sign-in and
+     * the expiry is derived from when the session was captured — saying "unknown"
+     * beats showing an invented date.
+     * @param {{ stored: boolean, loginDays: number | null, savedAt: string | null, expiresAt: string | null, remainingMs: number | null } | undefined} cookie
+     */
+    function cookieSummary(cookie) {
+      if (cookie === undefined || cookie === null || cookie.stored !== true) {
+        return '未保存（扫码后会保存，可自选有效期）'
+      }
+      const days = cookie.loginDays === null ? '未知' : `${cookie.loginDays} 天`
+      const left = cookie.remainingMs === null
+        ? null
+        : cookie.remainingMs <= 0
+          ? '已过期'
+          : `还剩 ${formatDuration(cookie.remainingMs)}`
+      const expires = cookie.expiresAt === null ? '未知' : new Date(cookie.expiresAt).toLocaleString()
+      return `${days}有效期${left === null ? '' : ` · ${left}`} · 到期 ${expires}`
     }
 
     /** Service names the doctor reports, in the panel's own words. */
@@ -380,6 +412,30 @@ window.__ModuleLoader__.load({
       return rows
     }
 
+    /**
+     * The session-lifetime control.
+     *
+     * CNB's confirmation takes the choice as `login_days`; its own default is 7 days.
+     * Offered in both the signed-out and signed-in states, because extending a short
+     * session is the common case and should not require logging out first.
+     */
+    function LoginDaysPicker({ value, onChange }) {
+      return h(
+        'label',
+        { className: 'dcnb-row', style: { gap: 6 } },
+        h('span', { className: 'dcnb-muted', style: { fontSize: 11 } }, '会话有效期'),
+        h(
+          'select',
+          {
+            className: 'dcnb-select',
+            value: String(value),
+            onChange: (event) => onChange(Number(event.target.value)),
+          },
+          LOGIN_DAY_CHOICES.map((days) => h('option', { key: days, value: String(days) }, `${days} 天`)),
+        ),
+      )
+    }
+
     /** One line: how much of the panel actually works. */
     function DoctorSummary({ doctor }) {
       const checks = doctor.checks ?? []
@@ -512,6 +568,7 @@ window.__ModuleLoader__.load({
       const [attempt, setAttempt] = useState(status?.pending ?? null)
       const [message, setMessage] = useState(null)
       const [tokenValue, setTokenValue] = useState('')
+      const [loginDays, setLoginDays] = useState(7)
       const [doctor, setDoctor] = useState(null)
       const [doctorBusy, setDoctorBusy] = useState(false)
       const timer = useRef(null)
@@ -567,7 +624,7 @@ window.__ModuleLoader__.load({
         setMessage(null)
         setBusy(true)
         try {
-          const view = await callApi('login.begin', {})
+          const view = await callApi('login.begin', { loginDays })
           setAttempt(view)
           stopPolling()
           timer.current = setTimeout(poll, 1500)
@@ -576,7 +633,7 @@ window.__ModuleLoader__.load({
         } finally {
           setBusy(false)
         }
-      }, [poll, stopPolling])
+      }, [loginDays, poll, stopPolling])
 
       const logout = useCallback(async () => {
         setBusy(true)
@@ -648,12 +705,14 @@ window.__ModuleLoader__.load({
                   h('dd', null, account?.loginAt === null || account?.loginAt === undefined ? '—' : new Date(account.loginAt).toLocaleString()),
                   h('dt', null, '令牌过期'),
                   h('dd', null, account?.expiredAt ? new Date(account.expiredAt).toLocaleString() : '长期有效'),
+                  h('dt', null, '登录 Cookie'),
+                  h('dd', null, cookieSummary(status?.cookie)),
                   h('dt', null, '自动续签'),
                   h(
                     'dd',
                     null,
                     status?.sessionStored
-                      ? `已保存登录会话${status.sessionAge ? `（${new Date(status.sessionAge).toLocaleString()}）` : ''}，令牌失效会自动重签，无需再扫码`
+                      ? '已保存会话，令牌失效会自动重签，无需再扫码'
                       : '未保存会话：下次令牌失效需要重新扫码',
                   ),
                 ),
@@ -661,6 +720,12 @@ window.__ModuleLoader__.load({
                   'div',
                   { className: 'dcnb-row', style: { marginTop: 12 } },
                   h('button', { className: 'dcnb-btn', onClick: onRefresh, disabled: busy }, '刷新'),
+                  h(LoginDaysPicker, { value: loginDays, onChange: setLoginDays }),
+                  h(
+                    'button',
+                    { className: 'dcnb-btn', onClick: begin, disabled: busy },
+                    busy ? '处理中…' : '重新扫码（换有效期）',
+                  ),
                   h('button', { className: 'dcnb-btn', 'data-tone': 'danger', onClick: logout, disabled: busy }, '退出登录'),
                 ),
               )
@@ -674,6 +739,7 @@ window.__ModuleLoader__.load({
                     ? '检测到环境变量 CNB_TOKEN，但尚未在本插件登录；扫码后可写入凭证记录并接管。'
                     : '使用微信扫码登录 CNB。扫码确认后插件会自动创建访问令牌并保存到本机凭证库，不再展示明文。',
                 ),
+                h(LoginDaysPicker, { value: loginDays, onChange: setLoginDays }),
                 h('button', { className: 'dcnb-btn', 'data-tone': 'primary', onClick: begin, disabled: busy }, busy ? '处理中…' : '扫码登录'),
               ),
         ),
