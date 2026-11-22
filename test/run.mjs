@@ -42,6 +42,7 @@ const suites = [
   ['gateway-token', 'gateway-token.test.mjs', false],
   ['neutralize', 'neutralize.test.mjs', false],
   ['onboarding', 'onboarding.test.mjs', false],
+  ['ambient-token', 'ambient-token.test.mjs', false],
   ['host-smoke', 'host-smoke.mjs', true],
 ]
 
