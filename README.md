@@ -18,13 +18,22 @@ CNB（[cnb.cool](https://cnb.cool)）接入 DeepSeek​ Harness 的插件：扫�
 
 ## 安装
 
-插件是标准 dsh bundle。用插件管理器装上本地目录即可：
+插件是标准 dsh bundle。下载后把目录装进你的 profile：
 
 ```bash
-dsh plugin install /path/to/dsh-cnb      # 或在 Web UI 的插件页安装
+# 克隆到任意位置
+git clone https://github.com/useragent-1/dsh-cnb.git
+cd dsh-cnb && npm test          # 可选：先跑一遍离线测试
+
+# 装进你的 profile（把 <profile> 换成你实际用的，例如 web）
+dsh plugin --profile <profile> add /绝对路径/dsh-cnb
 ```
 
-装好后侧边栏出现 **CNB** 图标，同时注册 15 个 `cnb_*` 工具。配置项只有一个可选的覆盖点，写在 `cordis.patch.yml` 里：
+`dsh plugin` 转发给 pnpm，所以本地目录要用**绝对路径**。
+
+装完在 dsh 的 Web 界面侧边栏会出现 **CNB** 入口，同时注册 15 个 `cnb_*` 工具给 agent。
+
+配置项只有一个可选的覆盖点，写在 `cordis.patch.yml` 里：
 
 ```yaml
 - id: dsh-cnb
