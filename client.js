@@ -1698,7 +1698,7 @@ window.__ModuleLoader__.load({
           : h(
               Card,
               {
-                title: '需要并入 overlay 配置',
+                title: '由更高优先级的配置层接管',
                 extra: h(
                   'button',
                   {
@@ -1710,7 +1710,15 @@ window.__ModuleLoader__.load({
                   '复制片段',
                 ),
               },
-              h(Banner, { tone: 'error' }, overlay.hint),
+              h(
+                'p',
+                { className: 'dcnb-muted', style: { margin: '0 0 10px', lineHeight: 1.6 } },
+                '这个 profile 用',
+                h('code', { className: 'dcnb-mono' }, ' --patch'),
+                ' 启动，下一层已经定义了 llm-pi-ai 与 agent-default-model，插件写在 profile 层会被它覆盖，因此 DSH 不接受写入。',
+                '如果现在这套配置能正常对话，就保持原样——插件不需要接管。只有在没有现成配置时才需要把片段并入。',
+              ),
+              h(Banner, { tone: 'ok' }, overlay.hint),
               h(
                 'pre',
                 {

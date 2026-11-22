@@ -40,6 +40,7 @@ const suites = [
   ['gateway-autopick', 'gateway-autopick.test.mjs', false],
   ['client-identifiers', 'client-identifiers.test.mjs', false],
   ['gateway-token', 'gateway-token.test.mjs', false],
+  ['neutralize', 'neutralize.test.mjs', false],
   ['host-smoke', 'host-smoke.mjs', true],
 ]
 
