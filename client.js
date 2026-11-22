@@ -416,6 +416,36 @@ window.__ModuleLoader__.load({
                     doctor.hint === null || doctor.hint === undefined
                       ? null
                       : h(Banner, { tone: doctor.healthy ? 'ok' : 'error' }, doctor.hint),
+                    (doctor.grants ?? []).length === 0
+                      ? null
+                      : h(
+                          'div',
+                          { style: { marginTop: 8 } },
+                          h('div', { className: 'dcnb-muted', style: { marginBottom: 4 } }, '去 CNB 令牌页勾选：'),
+                          (doctor.grants ?? []).map((grant) =>
+                            h(
+                              'div',
+                              { key: grant.scope, className: 'dcnb-row', style: { padding: '2px 0' } },
+                              h('span', { className: 'dcnb-tag' }, grant.label),
+                              h(
+                                'span',
+                                { className: 'dcnb-muted', style: { flex: 1, minWidth: 120 } },
+                                grant.meaning ?? grant.scope,
+                              ),
+                              h(
+                                'a',
+                                {
+                                  className: 'dcnb-btn',
+                                  href: grant.url,
+                                  target: '_blank',
+                                  rel: 'noreferrer noopener',
+                                  style: { textDecoration: 'none' },
+                                },
+                                '打开令牌页',
+                              ),
+                            ),
+                          ),
+                        ),
                   ),
             )
           : null,
