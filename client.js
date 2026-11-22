@@ -310,6 +310,20 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * Plain-language names for the gateway refusal categories.
+     *
+     * The Host classifies a refusal by cause, because the three cases need three
+     * different replies; this maps the identifier to something readable in a tag.
+     */
+    const GATEWAY_BLOCKERS = {
+      'personal-token': '个人令牌被拒',
+      'wrong-repo': '令牌属于别的仓库',
+      'no-ai': '仓库未开通 AI',
+      unauthorized: '令牌无效',
+      other: '其它原因',
+    }
+
+    /**
      * One line describing the stored session's expiry.
      *
      * The lifetime is CNB's decision, read from the `Set-Cookie` its confirmation
