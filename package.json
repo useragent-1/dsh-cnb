@@ -29,7 +29,8 @@
     "locale/*.json",
     "icon.svg",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "LICENSE-cnb2api"
   ],
   "dsh": {
     "bundle": {
@@ -57,5 +58,14 @@
   },
   "scripts": {
     "test": "node test/run.mjs"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/useragent-1/dsh-cnb.git"
+  },
+  "homepage": "https://github.com/useragent-1/dsh-cnb#readme",
+  "bugs": {
+    "url": "https://github.com/useragent-1/dsh-cnb/issues"
+  },
+  "author": "useragent-1"
 }
