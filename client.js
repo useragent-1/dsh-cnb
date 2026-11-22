@@ -219,6 +219,117 @@ window.__ModuleLoader__.load({
       'repo-delete': { label: '删除仓库', kind: 'write', summary: () => '仓库级接口可用' },
     }
 
+    /**
+     * Links returned by an action, shown for copying instead of auto-opened.
+     *
+     * Starting an environment answers with several different URLs depending on
+     * whether it created or reused one: the WebIDE entry, a loading page, the
+     * build log. Opening one of them on the user's behalf guesses which they
+     * wanted, so every link is listed with a copy button and they choose.
+     */
+    function LinkList({ title, links, onDismiss, onRefresh, refreshLabel }) {
+      const [copied, setCopied] = useState('')
+      const rows = (links ?? []).filter((link) => typeof link.url === 'string' && link.url !== '')
+      if (rows.length === 0) return null
+      const copy = (url) => {
+        const done = () => setCopied(url)
+        if (navigator.clipboard?.writeText) {
+          navigator.clipboard.writeText(url).then(done).catch(done)
+        } else {
+          // Older or unfocused documents have no async clipboard; a hidden
+          // textarea plus execCommand still works there.
+          const area = document.createElement('textarea')
+          area.value = url
+          area.style.position = 'fixed'
+          area.style.opacity = '0'
+          document.body.appendChild(area)
+          area.select()
+          try { document.execCommand('copy') } catch { /* nothing else to try */ }
+          document.body.removeChild(area)
+          done()
+        }
+      }
+      return h(
+        'section',
+        { className: 'dcnb-card' },
+        h(
+          'div',
+          { className: 'dcnb-row' },
+          h('h2', { style: { margin: 0 } }, title ?? '链接'),
+          h('span', { className: 'dcnb-spacer' }),
+          onRefresh === undefined
+            ? null
+            : h('button', { className: 'dcnb-btn', onClick: onRefresh }, refreshLabel ?? '刷新地址'),
+          onDismiss === undefined ? null : h('button', { className: 'dcnb-btn', onClick: onDismiss }, '关闭'),
+        ),
+        h(
+          'div',
+          { className: 'dcnb-list', style: { marginTop: 10 } },
+          rows.map((link) =>
+            h(
+              'div',
+              { key: link.label + link.url, className: 'dcnb-item' },
+              h(
+                'div',
+                { className: 'dcnb-main' },
+                h(
+                  'div',
+                  { className: 'dcnb-title' },
+                  h('span', null, link.label),
+                  link.note ? h('span', { className: 'dcnb-tag' }, link.note) : null,
+                ),
+                h(
+                  'div',
+                  { className: 'dcnb-mono', style: { marginTop: 2, wordBreak: 'break-all', userSelect: 'all' } },
+                  link.url,
+                ),
+              ),
+              h(
+                'div',
+                { className: 'dcnb-row' },
+                h('button', { className: 'dcnb-btn', onClick: () => copy(link.url) }, copied === link.url ? '已复制' : '复制'),
+                h(
+                  'a',
+                  { className: 'dcnb-btn', href: link.url, target: '_blank', rel: 'noreferrer noopener', style: { textDecoration: 'none' } },
+                  '打开',
+                ),
+              ),
+            ),
+          ),
+        ),
+      )
+    }
+
+    /**
+     * Every URL a start result carries, labelled by what it is for.
+     * @param {{ repo: string, branch?: string, sn?: string, url?: string, buildLogUrl?: string, webide?: string, jumpUrl?: string }} started
+     */
+    function startLinks(started) {
+      if (started === null || started === undefined) return []
+      const links = []
+      // CNB spells the same address with and without a trailing slash depending on
+      // which endpoint produced it; treat those as one link.
+      const same = (a, b) => a.replace(/\/+$/, '') === b.replace(/\/+$/, '')
+      const push = (label, url, note) => {
+        if (typeof url !== 'string' || url === '') return
+        if (links.some((link) => same(link.url, url))) return
+        links.push({ label, url, note })
+      }
+      push('WebIDE 入口', started.webide, started.sn ? `sn ${started.sn}` : undefined)
+      push('跳转页', started.jumpUrl)
+      if (typeof started.webide !== 'string' || started.webide === '') {
+        // A loading page is what CNB returns before the pipeline is up; it is worth
+        // copying, but it must not read as the finished environment.
+        push('启动页（环境就绪前）', started.url, started.message ? '构建中' : undefined)
+      }
+      push('流水线日志', started.buildLogUrl)
+      if (started.sn) {
+        push('环境详情', `https://cnb.cool/${started.repo}/-/workspace/vscode-web/${started.sn}`)
+      }
+      push('仓库主页', `https://cnb.cool/${started.repo}`)
+      return links
+    }
+
     /** One line: how much of the panel actually works. */
     function DoctorSummary({ doctor }) {
       const checks = doctor.checks ?? []
@@ -591,6 +702,7 @@ window.__ModuleLoader__.load({
       const [actionError, setActionError] = useState(null)
       const [actionMessage, setActionMessage] = useState(null)
       const [busy, setBusy] = useState(false)
+      const [links, setLinks] = useState(null)
       const repos = useApiState(() => callApi('repos.list', {}), [])
       const groups = useApiState(() => callApi('usage.list', {}), [])
 
@@ -625,6 +737,22 @@ window.__ModuleLoader__.load({
         null,
         actionError === null ? null : h(Banner, null, actionError),
         actionMessage === null ? null : h(Banner, { tone: 'ok' }, actionMessage),
+        links === null
+          ? null
+          : h(LinkList, {
+              title: links.title,
+              links: links.rows,
+              onDismiss: () => setLinks(null),
+              refreshLabel: links.starting ? '刷新地址（环境就绪后）' : '刷新地址',
+              onRefresh:
+                links.sn === null || links.sn === undefined
+                  ? undefined
+                  : async () => {
+                      const detail = await callApi('workspaces.detail', { repo: links.repo, sn: links.sn }).catch(() => null)
+                      const resolved = startLinks({ repo: links.repo, sn: links.sn, webide: detail?.detail?.webide, jumpUrl: detail?.detail?.jumpUrl, url: links.rows.find((r) => r.label === '开发环境地址')?.url })
+                      setLinks({ ...links, rows: resolved, starting: typeof detail?.detail?.webide !== 'string' })
+                    },
+            }),
         h(
           Card,
           {
@@ -675,11 +803,17 @@ window.__ModuleLoader__.load({
                             className: 'dcnb-btn',
                             disabled: busy,
                             onClick: () =>
-                            act('启动开发环境', async () => {
-                              const started = await callApi('workspaces.open', { repo: repo.slug })
-                              if (typeof started.url === 'string') window.open(started.url, '_blank', 'noopener')
-                              return started
-                            }),
+                              act('启动开发环境', async () => {
+                                const started = await callApi('workspaces.open', { repo: repo.slug })
+                                setLinks({
+                                  title: `${repo.slug} · 启动结果`,
+                                  rows: startLinks(started),
+                                  repo: repo.slug,
+                                  sn: started.sn,
+                                  starting: typeof started.webide !== 'string' || started.webide === '',
+                                })
+                                return started
+                              }),
                           },
                           '启动开发',
                         ),
@@ -766,6 +900,7 @@ window.__ModuleLoader__.load({
     function EnvironmentsTab({ status }) {
       const [repo, setRepo] = useState('')
       const [actionError, setActionError] = useState(null)
+      const [links, setLinks] = useState(null)
       const workspaces = useApiState(() => callApi('workspaces.list', {}), [])
       const detail = useApiState(
         () => (repo.trim() === '' ? Promise.resolve(null) : callApi('repos.status', { repo: repo.trim() })),
@@ -791,15 +926,22 @@ window.__ModuleLoader__.load({
         [detail, repo, workspaces],
       )
 
-      /** Resolve the environment's WebIDE URL, then hand it to the browser. */
+      /** Resolve the environment's URLs and list them, rather than opening one. */
       const openEnvironment = useCallback(
         async (slug, sn) => {
           setActionError(null)
           try {
             const result = await callApi('workspaces.detail', { repo: slug, sn })
-            const url = result?.detail?.webide ?? result?.detail?.jumpUrl
-            if (typeof url !== 'string' || url === '') throw new Error('该环境暂无可用地址')
-            window.open(url, '_blank', 'noopener')
+            const detail = result?.detail ?? {}
+            const rows = startLinks({
+              repo: slug,
+              sn,
+              webide: detail.webide,
+              jumpUrl: detail.jumpUrl,
+              url: detail.webide === undefined && detail.jumpUrl === undefined ? undefined : undefined,
+            })
+            if (rows.length === 0) throw new Error('该环境暂无可用地址')
+            setLinks({ title: `${slug} · ${sn}`, rows, repo: slug, sn, starting: false })
           } catch (error) {
             setActionError(error.message)
           }
@@ -814,6 +956,25 @@ window.__ModuleLoader__.load({
         React.Fragment,
         null,
         actionError === null ? null : h(Banner, null, actionError),
+        links === null
+          ? null
+          : h(LinkList, {
+              title: links.title,
+              links: links.rows,
+              onDismiss: () => setLinks(null),
+              refreshLabel: links.starting ? '刷新地址（环境就绪后）' : '刷新地址',
+              onRefresh:
+                links.sn === null || links.sn === undefined
+                  ? undefined
+                  : async () => {
+                      const detail = await callApi('workspaces.detail', { repo: links.repo, sn: links.sn }).catch(() => null)
+                      setLinks({
+                        ...links,
+                        rows: startLinks({ repo: links.repo, sn: links.sn, webide: detail?.detail?.webide, jumpUrl: detail?.detail?.jumpUrl }),
+                        starting: typeof detail?.detail?.webide !== 'string',
+                      })
+                    },
+            }),
         h(
           Card,
           {
@@ -906,7 +1067,13 @@ window.__ModuleLoader__.load({
                 onClick: () =>
                   act(async () => {
                     const started = await callApi('workspaces.open', { repo: repo.trim() })
-                    if (typeof started.url === 'string') window.open(started.url, '_blank', 'noopener')
+                    setLinks({
+                      title: `${repo.trim()} · 启动结果`,
+                      rows: startLinks(started),
+                      repo: repo.trim(),
+                      sn: started.sn,
+                      starting: typeof started.webide !== 'string' || started.webide === '',
+                    })
                     return started
                   }, '启动开发环境'),
               },
