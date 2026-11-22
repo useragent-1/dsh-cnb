@@ -68,6 +68,17 @@ mission-delete:rw  mission-manage:rw
 
 删除环境与新建仓库只有组织/账号级接口，没有替代路径——这两项确实需要全权限令牌。
 
+### 用登录会话绕过 token 的 scope 限制
+
+CNB 有两套彼此独立的鉴权模型：
+
+- **访问令牌**（`Authorization: Bearer`）：权限由签发时写入的 scope 决定，导入的令牌可能永远缺 `group-resource:rw` 或 `account-engage:rw`。
+- **网页登录会话**（cookie）：代表"已登录的这个人"本身，**不受 token scope 限制**。而且 `cnb.cool` 这个网页 origin 上同样挂载了同一批 JSON API。
+
+所以插件遇到 `10023`（缺 scope）时不会立刻失败：它会把同一个请求改发到 `cnb.cool`，带上保存下来的会话 cookie 和 `csrftoken`。成功就用这个结果。只有会话也被拒（说明这个人本身没有该权限）才报告缺权限。
+
+这条路径对**新建仓库**和**删除环境**是决定性的：只要你的账号在这些组织里是管理员/负责人，扫码一次之后这两项就能用，不需要改动令牌的任何 scope。
+
 ### 这两项权限怎么拿
 
 `account-engage` 和 `group-resource` 是**账号级授权**，只能在 CNB 签发令牌时写进令牌，插件无法为已有令牌追加。两条路：

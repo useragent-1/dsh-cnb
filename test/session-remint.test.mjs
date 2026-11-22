@@ -59,10 +59,17 @@ const sessionRecord = {
       minted += 1
       return json(201, { result: { token: 'fresh', token_id: 'n1' } })
     }
-    if (target.startsWith('https://cnb.cool/user')) return json(200, { username: 'tester', nickname: 'tester' })
-    if (target.includes('api.cnb.cool/user/repos')) {
-      // The stale token fails; the fresh one works.
+    // `/user/repos` also starts with `/user`, so the narrower route is matched first.
+    if (target === 'https://cnb.cool/user' || target.startsWith('https://cnb.cool/user?')) {
+      return json(200, { username: 'tester', nickname: 'tester' })
+    }
+    if (target.includes('api.cnb.cool/user/repos') || target.startsWith('https://cnb.cool/user/repos')) {
+      // The stale token fails; the fresh one works. The session retry must also
+      // fail here, or it would mask the re-mint this case is about.
       const auth = String(init?.headers?.authorization ?? '')
+      if (target.startsWith('https://cnb.cool/')) {
+        return json(403, { errcode: 10023, errmsg: 'Missing required scopes: repo-basic-info:r' })
+      }
       return auth.includes('fresh')
         ? json(200, [{ path: 'acme/alpha', name: 'alpha' }])
         : json(403, { errcode: 10023, errmsg: 'Missing required scopes: repo-basic-info:r' })
