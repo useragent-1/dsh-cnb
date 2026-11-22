@@ -195,15 +195,136 @@ window.__ModuleLoader__.load({
     }
 
     /** Service names the doctor reports, in the panel's own words. */
-    const CHECK_LABELS = {
-      identity: '账号身份',
-      repositories: '仓库列表',
-      organizations: '组织列表',
-      quota: '组织额度与用量',
-      workspaces: '开发环境列表',
-      'workspace-control': '停止 / 删除环境',
-      'repo-create': '新建仓库',
-      'repo-delete': '删除仓库',
+    /**
+     * How each probe is presented: what it means to the person, not the endpoint
+     * name. `kind` separates reads from writes so the list can group them, and
+     * `summary` turns the raw probe payload into one readable line.
+     */
+    const CHECK_META = {
+      identity: { label: '账号身份', kind: 'read', summary: (v) => (v?.username ? `${v.nickname || v.username}（${v.username}）` : '已登录') },
+      repositories: { label: '仓库列表', kind: 'read', summary: (v) => `${v?.total ?? 0} 个仓库${v?.first ? ` · ${v.first}` : ''}` },
+      organizations: { label: '组织列表', kind: 'read', summary: (v) => `${v?.count ?? 0} 个组织${(v?.slugs ?? []).length ? ` · ${v.slugs.join('、')}` : ''}` },
+      quota: {
+        label: '组织额度与用量',
+        kind: 'read',
+        summary: (v) => (v?.skipped ? '跳过：没有组织' : `${v?.slug ?? ''} · 额度${v?.hasQuota ? '✓' : '✗'} 用量${v?.hasUsage ? '✓' : '✗'}`),
+      },
+      workspaces: { label: '开发环境列表', kind: 'read', summary: (v) => `${v?.total ?? 0} 个环境` },
+      'workspace-control': {
+        label: '停止环境',
+        kind: 'write',
+        summary: (v) => (v?.via === 'build' ? '经仓库级流水线停止（账号级接口不可用）' : '账号级接口可用'),
+      },
+      'repo-create': { label: '新建仓库', kind: 'write', summary: (v) => (v?.slug ? `探测组织 ${v.slug}` : '组织级接口可用') },
+      'repo-delete': { label: '删除仓库', kind: 'write', summary: () => '仓库级接口可用' },
+    }
+
+    /** One line: how much of the panel actually works. */
+    function DoctorSummary({ doctor }) {
+      const checks = doctor.checks ?? []
+      const ok = checks.filter((check) => check.ok).length
+      const failed = checks.filter((check) => !check.ok)
+      const reads = checks.filter((check) => CHECK_META[check.name]?.kind !== 'write')
+      const writes = checks.filter((check) => CHECK_META[check.name]?.kind === 'write')
+      const countOk = (list) => list.filter((check) => check.ok).length
+      return h(
+        'div',
+        { className: 'dcnb-row', style: { gap: 14, marginBottom: 10 } },
+        h(
+          'span',
+          { className: 'dcnb-tag', 'data-tone': failed.length === 0 ? 'ok' : failed.length === checks.length ? 'err' : 'warn' },
+          failed.length === 0 ? '全部可用' : `${ok}/${checks.length} 可用`,
+        ),
+        h('span', { className: 'dcnb-muted' }, `读取 ${countOk(reads)}/${reads.length}`),
+        h('span', { className: 'dcnb-muted' }, `写入 ${countOk(writes)}/${writes.length}`),
+        doctor.rejected === true ? h('span', { className: 'dcnb-tag', 'data-tone': 'err' }, '令牌无效') : null,
+      )
+    }
+
+    /** A probe row: name, verdict, and one readable line — never raw JSON. */
+    function DoctorRow({ check }) {
+      const meta = CHECK_META[check.name] ?? { label: check.name, kind: 'read', summary: () => '' }
+      // A scope refusal is the common failure; show only the scope names, not the
+      // whole guidance sentence, which already appears once below the list.
+      const scopes = check.missingScopes ?? []
+      // A capability reached through a fallback is available but not the full
+      // thing, so it gets its own tone instead of reading as plain success.
+      const degraded = check.ok && check.value?.via === 'build'
+      const tone = check.ok ? (degraded ? 'warn' : 'ok') : scopes.length > 0 ? 'warn' : 'err'
+      const verdict = check.ok ? (degraded ? '降级可用' : '可用') : scopes.length > 0 ? '受限' : '失败'
+      const detail = check.ok
+        ? meta.summary(check.value ?? {})
+        : scopes.length > 0
+          ? `缺少 ${scopes.join('、')}`
+          : check.error ?? '失败'
+      return h(
+        'div',
+        { className: 'dcnb-item' },
+        h(
+          'div',
+          { className: 'dcnb-main' },
+          h(
+            'div',
+            { className: 'dcnb-title' },
+            h('span', null, meta.label),
+            h('span', { className: 'dcnb-tag', 'data-tone': tone }, verdict),
+          ),
+          h('div', { className: 'dcnb-muted', style: { marginTop: 2, wordBreak: 'break-word' } }, detail),
+          check.ok && meta.summary(check.value ?? {}).length === 0
+            ? h('div', { className: 'dcnb-mono', style: { marginTop: 2 } }, JSON.stringify(check.value))
+            : null,
+        ),
+      )
+    }
+
+    /**
+     * The whole self-check: a one-line verdict, the probes grouped by read/write,
+     * one guidance sentence, and the exact rows to tick when something is missing.
+     */
+    function DoctorReport({ doctor }) {
+      if (doctor.signedIn === false) {
+        return h(Banner, { tone: 'error' }, doctor.hint ?? '尚未登录：请先扫码登录，或粘贴一个访问令牌。')
+      }
+      const checks = doctor.checks ?? []
+      const reads = checks.filter((check) => CHECK_META[check.name]?.kind !== 'write')
+      const writes = checks.filter((check) => CHECK_META[check.name]?.kind === 'write')
+      const group = (title, rows) =>
+        rows.length === 0
+          ? null
+          : h(
+              'div',
+              { style: { marginTop: 10 } },
+              h('div', { className: 'dcnb-muted', style: { fontSize: 11, marginBottom: 4 } }, title),
+              h('div', { className: 'dcnb-list' }, rows.map((check) => h(DoctorRow, { key: check.name, check }))),
+            )
+      return h(
+        React.Fragment,
+        null,
+        h(DoctorSummary, { doctor }),
+        group('读取', reads),
+        group('写入', writes),
+        doctor.hint === null || doctor.hint === undefined ? null : h(Banner, { tone: doctor.healthy ? 'ok' : 'error' }, doctor.hint),
+        (doctor.grants ?? []).length === 0
+          ? null
+          : h(
+              'div',
+              { style: { marginTop: 10 } },
+              h('div', { className: 'dcnb-muted', style: { fontSize: 11, marginBottom: 4 } }, '去 CNB 令牌页勾选：'),
+              (doctor.grants ?? []).map((grant) =>
+                h(
+                  'div',
+                  { key: grant.scope, className: 'dcnb-row', style: { padding: '3px 0' } },
+                  h('span', { className: 'dcnb-tag' }, grant.label),
+                  h('span', { className: 'dcnb-muted', style: { flex: 1, minWidth: 120 } }, grant.meaning ?? grant.scope),
+                  h(
+                    'a',
+                    { className: 'dcnb-btn', href: grant.url, target: '_blank', rel: 'noreferrer noopener', style: { textDecoration: 'none' } },
+                    '打开令牌页',
+                  ),
+                ),
+              ),
+            ),
+      )
     }
 
     // ------------------------------------------------------------------- tabs
@@ -300,7 +421,7 @@ window.__ModuleLoader__.load({
         setDoctorBusy(true)
         setError(null)
         try {
-          setDoctor(await callApi('token.doctor', {}))
+          setDoctor({ ...(await callApi('token.doctor', {})), ranAt: Date.now() })
         } catch (doctorError) {
           setError(doctorError.message)
         } finally {
@@ -392,76 +513,22 @@ window.__ModuleLoader__.load({
               Card,
               {
                 title: '令牌自检',
-                extra: h('button', { className: 'dcnb-btn', disabled: doctorBusy, onClick: runDoctor }, doctorBusy ? '检测中…' : '检测权限'),
+                extra: h(
+                  'div',
+                  { className: 'dcnb-row', style: { gap: 10 } },
+                  doctor === null
+                    ? null
+                    : h('span', { className: 'dcnb-muted', style: { fontSize: 11 } }, `上次检测 ${new Date(doctor.ranAt ?? Date.now()).toLocaleTimeString()}`),
+                  h(
+                    'button',
+                    { className: 'dcnb-btn', disabled: doctorBusy, onClick: runDoctor },
+                    doctorBusy ? '检测中…' : doctor === null ? '开始检测' : '重新检测',
+                  ),
+                ),
               },
               doctor === null
-                ? h('p', { className: 'dcnb-muted', style: { margin: 0 } }, '逐个探测面板用到的接口，指出缺哪个权限项。')
-                : h(
-                    React.Fragment,
-                    null,
-                    h(
-                      'div',
-                      { className: 'dcnb-list' },
-                      (doctor.checks ?? []).map((check) =>
-                        h(
-                          'div',
-                          { key: check.name, className: 'dcnb-item' },
-                          h(
-                            'div',
-                            { className: 'dcnb-main' },
-                            h(
-                              'div',
-                              { className: 'dcnb-title' },
-                              h('span', null, CHECK_LABELS[check.name] ?? check.name),
-                              h(
-                                'span',
-                                { className: 'dcnb-tag', 'data-tone': check.ok ? 'ok' : 'err' },
-                                check.ok ? '可用' : '受限',
-                              ),
-                            ),
-                            h(
-                              'div',
-                              { className: 'dcnb-mono', style: { marginTop: 2, wordBreak: 'break-all' } },
-                              check.ok ? JSON.stringify(check.value) : check.error,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    doctor.hint === null || doctor.hint === undefined
-                      ? null
-                      : h(Banner, { tone: doctor.healthy ? 'ok' : 'error' }, doctor.hint),
-                    (doctor.grants ?? []).length === 0
-                      ? null
-                      : h(
-                          'div',
-                          { style: { marginTop: 8 } },
-                          h('div', { className: 'dcnb-muted', style: { marginBottom: 4 } }, '去 CNB 令牌页勾选：'),
-                          (doctor.grants ?? []).map((grant) =>
-                            h(
-                              'div',
-                              { key: grant.scope, className: 'dcnb-row', style: { padding: '2px 0' } },
-                              h('span', { className: 'dcnb-tag' }, grant.label),
-                              h(
-                                'span',
-                                { className: 'dcnb-muted', style: { flex: 1, minWidth: 120 } },
-                                grant.meaning ?? grant.scope,
-                              ),
-                              h(
-                                'a',
-                                {
-                                  className: 'dcnb-btn',
-                                  href: grant.url,
-                                  target: '_blank',
-                                  rel: 'noreferrer noopener',
-                                  style: { textDecoration: 'none' },
-                                },
-                                '打开令牌页',
-                              ),
-                            ),
-                          ),
-                        ),
-                  ),
+                ? h('p', { className: 'dcnb-muted', style: { margin: 0 } }, `逐个探测面板用到的 ${Object.keys(CHECK_META).length} 个接口（读 5 项、写 3 项），指出缺哪个权限项。`)
+                : h(DoctorReport, { doctor }),
             )
           : null,
         attempt
