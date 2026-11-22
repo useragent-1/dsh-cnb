@@ -350,6 +350,14 @@ window.__ModuleLoader__.load({
                   h('dd', null, account?.loginAt === null || account?.loginAt === undefined ? '—' : new Date(account.loginAt).toLocaleString()),
                   h('dt', null, '令牌过期'),
                   h('dd', null, account?.expiredAt ? new Date(account.expiredAt).toLocaleString() : '长期有效'),
+                  h('dt', null, '自动续签'),
+                  h(
+                    'dd',
+                    null,
+                    status?.sessionStored
+                      ? `已保存登录会话${status.sessionAge ? `（${new Date(status.sessionAge).toLocaleString()}）` : ''}，令牌失效会自动重签，无需再扫码`
+                      : '未保存会话：下次令牌失效需要重新扫码',
+                  ),
                 ),
                 h(
                   'div',
