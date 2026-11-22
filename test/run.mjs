@@ -22,6 +22,7 @@ const suites = [
   ['session-remint', 'session-remint.test.mjs', false],
   ['workspace-open', 'workspace-open.test.mjs', false],
   ['session-fallback', 'session-fallback.test.mjs', false],
+  ['session-capability', 'session-capability.test.mjs', false],
   ['mini-yaml', 'mini-yaml.test.mjs', false],
   ['qr', 'qr.test.mjs', false],
   ['gateway-overlay', 'gateway-overlay.test.mjs', false],

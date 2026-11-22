@@ -227,6 +227,7 @@ window.__ModuleLoader__.load({
       const reads = checks.filter((check) => CHECK_META[check.name]?.kind !== 'write')
       const writes = checks.filter((check) => CHECK_META[check.name]?.kind === 'write')
       const countOk = (list) => list.filter((check) => check.ok).length
+      const keptAlive = checks.filter((check) => check.ok && check.viaSession === true).length
       return h(
         'div',
         { className: 'dcnb-row', style: { gap: 14, marginBottom: 10 } },
@@ -237,6 +238,9 @@ window.__ModuleLoader__.load({
         ),
         h('span', { className: 'dcnb-muted' }, `读取 ${countOk(reads)}/${reads.length}`),
         h('span', { className: 'dcnb-muted' }, `写入 ${countOk(writes)}/${writes.length}`),
+        // Say plainly that some of it works because of the session, so the numbers
+        // are not mistaken for the token being fully privileged.
+        keptAlive > 0 ? h('span', { className: 'dcnb-muted' }, `其中 ${keptAlive} 项经登录会话完成`) : null,
         doctor.rejected === true ? h('span', { className: 'dcnb-tag', 'data-tone': 'err' }, '令牌无效') : null,
       )
     }
@@ -247,13 +251,25 @@ window.__ModuleLoader__.load({
       // A scope refusal is the common failure; show only the scope names, not the
       // whole guidance sentence, which already appears once below the list.
       const scopes = check.missingScopes ?? []
-      // A capability reached through a fallback is available but not the full
-      // thing, so it gets its own tone instead of reading as plain success.
-      const degraded = check.ok && check.value?.via === 'build'
-      const tone = check.ok ? (degraded ? 'warn' : 'ok') : scopes.length > 0 ? 'warn' : 'err'
-      const verdict = check.ok ? (degraded ? '降级可用' : '可用') : scopes.length > 0 ? '受限' : '失败'
+      // Three ways a capability can be available; none of them is a red failure.
+      // `viaSession` means the token could not authorize it but the stored session
+      // did — which is a success, not a problem to fix.
+      const viaSession = check.ok && check.viaSession === true
+      const viaBuild = check.ok && check.value?.via === 'build'
+      const tone = check.ok ? (viaSession || viaBuild ? 'warn' : 'ok') : scopes.length > 0 ? 'warn' : 'err'
+      const verdict = check.ok
+        ? viaSession
+          ? '经会话可用'
+          : viaBuild
+            ? '降级可用'
+            : '可用'
+        : scopes.length > 0
+          ? '受限'
+          : '失败'
       const detail = check.ok
-        ? meta.summary(check.value ?? {})
+        ? viaSession
+          ? `${meta.summary(check.value ?? {})} · 令牌缺该项权限，已用登录会话完成`
+          : meta.summary(check.value ?? {})
         : scopes.length > 0
           ? `缺少 ${scopes.join('、')}`
           : check.error ?? '失败'
