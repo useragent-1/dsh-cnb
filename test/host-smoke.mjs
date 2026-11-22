@@ -74,7 +74,18 @@ assert.equal(typeof repos.total, 'number')
 assert.ok(repos.items.length > 0, 'the account must own at least one repository')
 assert.ok(repos.items.every((repo) => Array.isArray(repo.environments)), 'every repo carries its environments')
 
-const target = repos.items.find((repo) => repo.environments.length > 0) ?? repos.items[0]
+// Pick a repository whose AI gateway actually answers. A freshly created repository
+// does not have it enabled, and the point here is the account's capabilities rather
+// than whichever repository happens to sort first — so probe instead of guessing from
+// a field that does not exist.
+let target = repos.items.find((repo) => repo.environments.length > 0) ?? repos.items[0]
+for (const candidate of repos.items) {
+  const attempt = await api.runOperation('gateway.probe', { repo: candidate.slug, prompt: 'ping' })
+  if (attempt.reachable === true) {
+    target = candidate
+    break
+  }
+}
 const detail = await api.runOperation('repos.status', { repo: target.slug })
 assert.equal(typeof detail.info.name, 'string')
 assert.ok(Array.isArray(detail.environments))

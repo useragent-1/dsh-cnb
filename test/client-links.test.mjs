@@ -1,16 +1,19 @@
 /**
- * Desktop editors do not get their own CNB URL.
+ * Editors reach the environment through URI schemes, not through HTTP pages.
  *
- * The tempting guess is `/-/workspace/cursor/<sn>/` and friends. Testing showed
- * that is fabricated: the frontend build ships only `jump`, `loading` and `error`
- * under `/-/workspace/`, and the app is a catch-all, so an invented path answers
- * 401 exactly like a real one. Shipping it would hand someone a link that looks
- * right and fails.
+ * The tempting guess was `/-/workspace/cursor/<sn>/`, which is fabricated: the web
+ * app ships only `jump`, `loading` and `error` under `/-/workspace/`, and it is a
+ * catch-all, so an invented path answers 401 exactly like a real one. That much was
+ * right.
  *
- * The documented mechanism is one thing, not thirteen: every desktop editor
- * attaches over SSH (Remote-SSH), JetBrains over Gateway, and both need
- * `openssh-server` in the image. So this pins that the plugin never emits a
- * per-editor page URL, and does emit the connection coordinates when it knows them.
+ * The conclusion drawn from it was wrong. `workspace/detail` does return one link per
+ * editor — `vscode://`, `cursor://`, `zed://`, `windsurf://`, `codebuddy://` and so on
+ * — but they are URI-scheme handoffs to a local client, so they are invisible to anyone
+ * looking for a page. They appear only once an environment is running, which is why
+ * they were missed.
+ *
+ * This pins both halves: no invented HTTP path, and every scheme link the platform
+ * reports is passed through untouched.
  */
 import assert from 'node:assert/strict'
 import { apply } from '../lib/index.js'
@@ -66,42 +69,44 @@ function stubDetail() {
   }
 }
 
-// --- case 2: the SSH coordinates are given when the host is known --------------
+// --- case 2: the connection string comes from the detail answer -------------
 {
-  const previous = process.env.CNB_WORKSPACE_SSH_HOST
-  process.env.CNB_WORKSPACE_SSH_HOST = 'ssh.example.test'
   const api = harness()
-  stubDetail()
+  const remote = 'cnb-1-001.abc-gjp@cnb.space'
+  globalThis.fetch = async (url) => {
+    if (String(url).includes('/-/workspace/detail/')) {
+      return json(200, {
+        webide: 'https://cnb.cool/acme/alpha/-/workspace/vscode-web/cnb-1-001/',
+        jumpUrl: 'https://cnb.cool/acme/alpha/-/workspace/jump?pipelineId=cnb-1-001',
+        remoteSsh: remote,
+        cursor: 'cursor://vscode-remote/ssh-remote+' + remote + '/workspace/',
+      })
+    }
+    return json(200, {})
+  }
   try {
     const result = await api.runOperation('workspaces.detail', { repo: 'acme/alpha', sn: 'cnb-1' })
     const ssh = result.links.find((link) => link.kind === 'ssh')
     assert.ok(ssh, 'the Remote-SSH connection string must be present')
-    assert.match(ssh.url, /^ssh cnb-1-001@ssh\.example\.test$/)
+    assert.equal(ssh.url, `ssh ${remote}`, 'built from the endpoint the platform reports')
     const config = result.links.find((link) => link.kind === 'ssh-config')
     assert.ok(config, 'an ssh config snippet is more useful than a one-liner')
-    assert.match(config.url, /HostName ssh\.example\.test/)
-    assert.match(config.url, /User cnb-1-001/)
+    assert.match(config.url, /HostName cnb\.space/)
+    assert.match(config.url, /User cnb-1-001\.abc-gjp/)
   } finally {
-    if (previous === undefined) delete process.env.CNB_WORKSPACE_SSH_HOST
-    else process.env.CNB_WORKSPACE_SSH_HOST = previous
     globalThis.fetch = originalFetch
   }
 }
 
-// --- case 3: without a known host, no guessed SSH endpoint ---------------------
+// --- case 3: no detail means no invented endpoint --------------------------
 {
-  const previous = process.env.CNB_WORKSPACE_SSH_HOST
-  const previousAlt = process.env.CNB_SSH_HOST
-  delete process.env.CNB_WORKSPACE_SSH_HOST
-  delete process.env.CNB_SSH_HOST
   const api = harness()
-  stubDetail()
+  globalThis.fetch = async () => json(404, { errcode: 404, errmsg: 'not found' })
   try {
     const result = await api.runOperation('workspaces.detail', { repo: 'acme/alpha', sn: 'cnb-1' })
-    assert.equal(result.links.filter((link) => link.kind === 'ssh').length, 0, 'a guessed host would fail silently')
+    assert.equal(result.links.filter((link) => link.kind === 'ssh').length, 0,
+      'a closed environment has no endpoint, and one must not be made up')
   } finally {
-    if (previous !== undefined) process.env.CNB_WORKSPACE_SSH_HOST = previous
-    if (previousAlt !== undefined) process.env.CNB_SSH_HOST = previousAlt
     globalThis.fetch = originalFetch
   }
 }

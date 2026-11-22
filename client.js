@@ -30,7 +30,7 @@ window.__ModuleLoader__.load({
 .dcnb-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .dcnb-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
 .dcnb-muted{color:var(--dsw-alias-label-secondary)}
-.dcnb-mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+.dcnb-mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;white-space:pre-wrap}
 /* Buttons never read as blank white: the fill is a tinted surface, the border
    carries the tone, and the label keeps contrast in both themes. */
 .dcnb-btn{appearance:none;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:1.4;padding:6px 12px;border-radius:8px;cursor:pointer;transition:background .15s ease,border-color .15s ease,color .15s ease}
@@ -429,10 +429,19 @@ window.__ModuleLoader__.load({
                 'div',
                 { className: 'dcnb-row' },
                 h('button', { className: 'dcnb-btn', onClick: () => copy(link.url) }, copied === link.url ? '已复制' : '复制'),
+                // A URI-scheme link (cursor://, vscode://, ssh …) must not be opened in
+                // a new tab: the browser hands it to the local client, and target=blank
+                // produces a dead tab. Plain https links and non-URL strings get no
+                // open button at all when they cannot be followed.
                 h(
                   'a',
-                  { className: 'dcnb-btn', href: link.url, target: '_blank', rel: 'noreferrer noopener', style: { textDecoration: 'none' } },
-                  '打开',
+                  {
+                    className: 'dcnb-btn',
+                    href: link.url,
+                    ...(link.url.startsWith('http') ? { target: '_blank', rel: 'noreferrer noopener' } : {}),
+                    style: { textDecoration: 'none' },
+                  },
+                  link.url.startsWith('http') ? '打开' : '交由本机处理',
                 ),
               ),
             ),
