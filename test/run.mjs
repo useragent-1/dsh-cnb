@@ -24,6 +24,7 @@ const suites = [
   ['start-links', 'start-links.test.mjs', false],
   ['environment-links', 'environment-links.test.mjs', false],
   ['address-cache', 'address-cache.test.mjs', false],
+  ['client-links', 'client-links.test.mjs', false],
   ['session-fallback', 'session-fallback.test.mjs', false],
   ['session-capability', 'session-capability.test.mjs', false],
   ['mini-yaml', 'mini-yaml.test.mjs', false],

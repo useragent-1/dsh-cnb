@@ -258,7 +258,7 @@ window.__ModuleLoader__.load({
      * build log. Opening one of them on the user's behalf guesses which they
      * wanted, so every link is listed with a copy button and they choose.
      */
-    function LinkList({ title, links, onDismiss, onRefresh, refreshLabel, inline }) {
+    function LinkList({ title, links, onDismiss, onRefresh, refreshLabel, inline, hint }) {
       const [copied, setCopied] = useState('')
       const rows = (links ?? []).filter((link) => typeof link.url === 'string' && link.url !== '')
       if (rows.length === 0) return null
@@ -330,6 +330,9 @@ window.__ModuleLoader__.load({
             ),
           ),
         ),
+        hint === undefined || hint === null || hint === ''
+          ? null
+          : h('p', { className: 'dcnb-muted', style: { margin: '10px 0 0', fontSize: 11, lineHeight: 1.6 } }, hint),
       )
     }
 
@@ -992,7 +995,7 @@ window.__ModuleLoader__.load({
           const rows = normaliseLinks(result ?? {})
           if (rows.length === 0) throw new Error('该环境暂无可用地址')
           setAddresses((previous) => {
-            const next = { ...previous, [key]: { rows, error: null, portTemplate: result?.portTemplate ?? null, at: Date.now() } }
+            const next = { ...previous, [key]: { rows, error: null, portTemplate: result?.portTemplate ?? null, hint: result?.clientHint ?? null, at: Date.now() } }
             writeAddressCache(next)
             return next
           })
@@ -1137,6 +1140,7 @@ window.__ModuleLoader__.load({
                                       title: `${workspace.slug} · ${workspace.sn}`,
                                       links: rows,
                                       inline: true,
+                                      hint: entry.hint ?? null,
                                       refreshLabel: '刷新地址',
                                       onRefresh: () => loadAddresses(workspace.slug, workspace.sn),
                                     }),

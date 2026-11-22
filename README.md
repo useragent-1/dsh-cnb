@@ -161,6 +161,25 @@ CNB 的创建接口对一份"授予不了任何权限"的 scope 也返回成功�
 
 地址按去掉尾部斜杠去重，`vscode-web/cnb-1/` 和 `vscode-web/cnb-1` 只出现一次。
 
+### Cursor / VS Code 等桌面编辑器怎么接
+
+**它们没有各自的 CNB 链接。** 这一点我实测确认过，值得说明白：
+
+- CNB 前端构建清单里，`/-/workspace/` 下只有 `jump`、`loading`、`error` 三个页面；
+- 页面是 catch-all 路由，所以 `/-/workspace/cursor/<sn>/` 这种编出来的路径会返回 401，**和真实路径的响应一模一样**，无法用状态码区分；
+- 官方文档写的机制是：VS Code / Cursor / CodeBuddy 通过 **Remote-SSH** 连接，JetBrains 通过 **Gateway**（同样走 SSH）。
+
+所以插件不编造 per-editor 链接，而是给出**连接坐标**：
+
+```
+Remote-SSH 连接串   ssh <pipelineId>@<ssh-host>
+~/.ssh/config 片段  Host cnb-<pipelineId> / HostName … / User … / Port 22
+```
+
+前提两条，面板会写在链接下面：镜像需预装 `openssh-server`；JetBrains 还需把 IDE 装到 `/ide_cnb`。
+
+SSH 主机名只在环境内部可获取（`CNB_WORKSPACE_SSH_HOST`）。拿不到时插件**不猜**——宁可少一条，也不给一个看起来对、连不上的地址。
+
 ### 一个环境有七类入口
 
 `workspace/detail` 只返回两条（WebIDE、跳转页），但一个环境实际有这些：
