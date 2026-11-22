@@ -44,7 +44,7 @@ window.__ModuleLoader__.load({
 .dcnb-banner[data-tone=error]{color:var(--dsw-alias-state-error-primary);border-color:var(--dsw-alias-state-error-primary)}
 .dcnb-banner[data-tone=ok]{color:var(--dsw-alias-state-success-primary);border-color:var(--dsw-alias-state-success-primary)}
 .dcnb-list{display:flex;flex-direction:column;gap:8px}
-.dcnb-item{display:flex;gap:10px;align-items:flex-start;padding:10px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-base)}
+.dcnb-item{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-start;padding:10px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-base)}
 .dcnb-item .dcnb-main{flex:1;min-width:0}
 .dcnb-item .dcnb-title{display:flex;gap:8px;align-items:center;font-weight:600;font-size:12.5px}
 .dcnb-tag{font-size:10.5px;padding:1px 6px;border-radius:999px;border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary)}
@@ -194,6 +194,37 @@ window.__ModuleLoader__.load({
       return { ...state, reload }
     }
 
+    /** Where the resolved address lists live between page loads. */
+    const ADDRESS_CACHE_KEY = 'dsh-cnb.addresses.v1'
+    /** Enough entries for a page of environments; older ones fall off. */
+    const ADDRESS_CACHE_LIMIT = 40
+
+    /** @returns {Record<string, { rows: Array<{kind: string, label: string, url: string, note?: string}>, error: null, portTemplate: string | null, at: number }>} */
+    function readAddressCache() {
+      try {
+        const raw = window.localStorage.getItem(ADDRESS_CACHE_KEY)
+        if (raw === null) return {}
+        const parsed = JSON.parse(raw)
+        if (parsed === null || typeof parsed !== 'object') return {}
+        const entries = Object.entries(parsed).filter(([, value]) => value && Array.isArray(value.rows))
+        entries.sort((a, b) => (b[1].at ?? 0) - (a[1].at ?? 0))
+        return Object.fromEntries(entries.slice(0, ADDRESS_CACHE_LIMIT))
+      } catch {
+        // A corrupt or unavailable store must not break the panel.
+        return {}
+      }
+    }
+
+    /** @param {Record<string, unknown>} value */
+    function writeAddressCache(value) {
+      try {
+        const entries = Object.entries(value).sort((a, b) => (b[1].at ?? 0) - (a[1].at ?? 0))
+        window.localStorage.setItem(ADDRESS_CACHE_KEY, JSON.stringify(Object.fromEntries(entries.slice(0, ADDRESS_CACHE_LIMIT))))
+      } catch {
+        // Quota or a disabled store only costs persistence, not the feature.
+      }
+    }
+
     /** Service names the doctor reports, in the panel's own words. */
     /**
      * How each probe is presented: what it means to the person, not the endpoint
@@ -227,7 +258,7 @@ window.__ModuleLoader__.load({
      * build log. Opening one of them on the user's behalf guesses which they
      * wanted, so every link is listed with a copy button and they choose.
      */
-    function LinkList({ title, links, onDismiss, onRefresh, refreshLabel }) {
+    function LinkList({ title, links, onDismiss, onRefresh, refreshLabel, inline }) {
       const [copied, setCopied] = useState('')
       const rows = (links ?? []).filter((link) => typeof link.url === 'string' && link.url !== '')
       if (rows.length === 0) return null
@@ -249,17 +280,19 @@ window.__ModuleLoader__.load({
           done()
         }
       }
+      const copyAll = () => copy(rows.map((row) => row.url).join('\n'))
       return h(
-        'section',
-        { className: 'dcnb-card' },
+        inline === true ? 'div' : 'section',
+        inline === true ? { style: { marginTop: 8 } } : { className: 'dcnb-card' },
         h(
           'div',
           { className: 'dcnb-row' },
-          h('h2', { style: { margin: 0 } }, title ?? '链接'),
+          h('h2', { style: { margin: 0, fontSize: inline === true ? 12 : undefined } }, title ?? '链接'),
           h('span', { className: 'dcnb-spacer' }),
           onRefresh === undefined
             ? null
             : h('button', { className: 'dcnb-btn', onClick: onRefresh }, refreshLabel ?? '刷新地址'),
+          h('button', { className: 'dcnb-btn', onClick: copyAll }, copied === rows.map((row) => row.url).join('\n') ? '已复制全部' : `复制全部 (${rows.length})`),
           onDismiss === undefined ? null : h('button', { className: 'dcnb-btn', onClick: onDismiss }, '关闭'),
         ),
         h(
@@ -940,22 +973,54 @@ window.__ModuleLoader__.load({
         [detail, repo, workspaces],
       )
 
-      /** Resolve the environment's URLs and list them, rather than opening one. */
-      const openEnvironment = useCallback(
-        async (slug, sn) => {
+      /**
+       * Resolved addresses per environment, kept for as long as the tab is open.
+       *
+       * A start result used to be the only place the links appeared, so they were
+       * gone the moment the card was dismissed or the page reloaded. Caching them
+       * by `repo/sn` means any environment can be re-expanded at any time, and the
+       * addresses do not depend on having just started it.
+       */
+      const [addresses, setAddresses] = useState(() => readAddressCache())
+      const [openRow, setOpenRow] = useState('')
+
+      /** @param {string} slug @param {string} sn */
+      const loadAddresses = useCallback(async (slug, sn) => {
+        const key = `${slug}/${sn}`
+        try {
+          const result = await callApi('workspaces.detail', { repo: slug, sn })
+          const rows = normaliseLinks(result ?? {})
+          if (rows.length === 0) throw new Error('该环境暂无可用地址')
+          setAddresses((previous) => {
+            const next = { ...previous, [key]: { rows, error: null, portTemplate: result?.portTemplate ?? null, at: Date.now() } }
+            writeAddressCache(next)
+            return next
+          })
+        } catch (error) {
+          // Keep whatever was cached: the addresses do not become wrong because the
+          // API is unreachable, and the person may simply want them copied again.
+          setAddresses((previous) => {
+            const cached = previous[key]
+            const next = {
+              ...previous,
+              [key]: { rows: cached?.rows ?? [], error: error.message, portTemplate: cached?.portTemplate ?? null, at: cached?.at ?? 0 },
+            }
+            writeAddressCache(next)
+            return next
+          })
+        }
+      }, [])
+
+      const toggleAddresses = useCallback(
+        (slug, sn) => {
+          const key = `${slug}/${sn}`
+          setOpenRow((current) => (current === key ? '' : key))
           setActionError(null)
-          try {
-            const result = await callApi('workspaces.detail', { repo: slug, sn })
-            // workspaces.detail returns every entry point: WebIDE, CodeBuddy, the
-            // jump page, the log, the repository, and port previews.
-            const rows = normaliseLinks(result ?? {})
-            if (rows.length === 0) throw new Error('该环境暂无可用地址')
-            setLinks({ title: `${slug} · ${sn}`, rows, repo: slug, sn, starting: false })
-          } catch (error) {
-            setActionError(error.message)
-          }
+          // Fetch again on open so a started environment's new ports and entry
+          // points show up; a cached list is still useful while it loads.
+          void loadAddresses(slug, sn)
         },
-        [],
+        [loadAddresses],
       )
 
       const environments = detail.data?.environments ?? []
@@ -1026,8 +1091,12 @@ window.__ModuleLoader__.load({
                         { className: 'dcnb-row' },
                         h(
                           'button',
-                          { className: 'dcnb-btn', onClick: () => openEnvironment(workspace.slug, workspace.sn) },
-                          '打开',
+                          {
+                            className: 'dcnb-btn',
+                            'data-tone': openRow === `${workspace.slug}/${workspace.sn}` ? 'primary' : undefined,
+                            onClick: () => toggleAddresses(workspace.slug, workspace.sn),
+                          },
+                          openRow === `${workspace.slug}/${workspace.sn}` ? '收起地址' : '地址',
                         ),
                         h(
                           'button',
@@ -1050,6 +1119,31 @@ window.__ModuleLoader__.load({
                           '删除',
                         ),
                       ),
+                      openRow === `${workspace.slug}/${workspace.sn}`
+                        ? h(
+                            'div',
+                            { style: { flexBasis: '100%' } },
+                            (() => {
+                              const entry = addresses[`${workspace.slug}/${workspace.sn}`]
+                              if (entry === undefined) return h('div', { className: 'dcnb-muted', style: { paddingTop: 6 } }, '读取地址…')
+                              const rows = entry.rows ?? []
+                              return h(
+                                React.Fragment,
+                                null,
+                                entry.error === null ? null : h(Banner, null, entry.error),
+                                rows.length === 0
+                                  ? h('div', { className: 'dcnb-muted', style: { paddingTop: 6 } }, '暂无地址，点「刷新地址」重试')
+                                  : h(LinkList, {
+                                      title: `${workspace.slug} · ${workspace.sn}`,
+                                      links: rows,
+                                      inline: true,
+                                      refreshLabel: '刷新地址',
+                                      onRefresh: () => loadAddresses(workspace.slug, workspace.sn),
+                                    }),
+                              )
+                            })(),
+                          )
+                        : null,
                     ),
                   ),
                 ),
