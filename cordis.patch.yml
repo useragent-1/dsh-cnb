@@ -1,0 +1,5 @@
+# dsh-cnb bundle patch: inserts the CNB panel and its tools into a profile.
+- insert:
+    - id: dsh-cnb
+      name: dsh-cnb
+      config: {}

@@ -1,0 +1,39 @@
+/**
+ * Test entry point.
+ *
+ *   npm test                 # offline suites
+ *   CNB_TOKEN=… npm test     # also exercises the live CNB OpenAPI
+ *
+ * The QR decode assertion needs the `jsqr` dev dependency; the live suites need
+ * CNB_TOKEN and are skipped when it is absent.
+ */
+import { spawnSync } from 'node:child_process'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const here = dirname(fileURLToPath(import.meta.url))
+const suites = [
+  ['mini-yaml', 'mini-yaml.test.mjs', false],
+  ['qr', 'qr.test.mjs', false],
+  ['gateway-overlay', 'gateway-overlay.test.mjs', false],
+  ['host-smoke', 'host-smoke.mjs', true],
+]
+
+let failures = 0
+for (const [name, file, needsToken] of suites) {
+  if (needsToken && (process.env.CNB_TOKEN ?? '') === '') {
+    console.log(`skip  ${name} (CNB_TOKEN unset)`)
+    continue
+  }
+  const result = spawnSync(process.execPath, [join(here, file)], { stdio: 'inherit' })
+  if (result.status === 0) {
+    console.log(`pass  ${name}`)
+  } else {
+    failures += 1
+    console.error(`FAIL  ${name}`)
+  }
+}
+if (failures > 0) {
+  console.error(`${failures} suite(s) failed`)
+  process.exit(1)
+}
