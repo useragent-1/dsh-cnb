@@ -645,11 +645,19 @@ window.__ModuleLoader__.load({
               // Every profile was tried and none produced a usable token. Say that,
               // and say what was asked for, so this reads as a platform-side limit
               // rather than a silent success.
+              // The scan itself worked and the session is kept, so this is not a
+              // dead end: say what failed (the minted token), what still works (the
+              // session), and the one action that fixes it.
               const attempts = (result.tried ?? []).map((entry) => entry.profile).join(' → ')
+              const reasons = (result.tried ?? [])
+                .filter((entry) => entry.error)
+                .map((entry) => `${entry.profile}: ${entry.error}`)
+                .slice(0, 2)
               setError(
-                `已登录 ${who}，但签出的令牌都无法读取账号（已依次尝试：${attempts || '全权限'}）。` +
-                  '这说明账号角色限制了可授予的权限，不是令牌格式问题。' +
-                  '请在 CNB 令牌页确认账号在这些组织里的角色，或直接粘贴一个能用的令牌。',
+                `扫码成功（${who}），登录会话已保存，但自动签发的访问令牌都用不了（试过 ${attempts || '全权限'}）。` +
+                  (reasons.length > 0 ? `失败原因：${reasons.join('；')}。` : '') +
+                  '会话本身可用：面板里的读取操作会直接走会话。' +
+                  '要彻底解决，去 cnb.cool/profile/token 手动创建一个令牌再粘贴进来，或在令牌页确认这个账号的角色。',
               )
             } else {
               const profile = result.login?.scopeProfile
@@ -776,6 +784,14 @@ window.__ModuleLoader__.load({
               )
             : h(LoginPanel, { status, busy, attempt, error, onBegin: begin }),
         ),
+        status?.health === 'session-only'
+          ? h(
+              Banner,
+              { tone: 'ok' },
+              '当前是「仅会话」登录：自动签发的令牌没通过验证，但扫码会话有效，读取操作可直接用。' +
+                '需要写权限时，在 cnb.cool/profile/token 手动创建一个令牌并粘贴到下面。',
+            )
+          : null,
         status?.health === 'no-permission'
           ? h(
               Banner,
