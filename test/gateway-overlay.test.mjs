@@ -14,7 +14,9 @@ import { importFromDsh } from './resolve-dsh.mjs'
 const { Config: PiAiConfig } = await importFromDsh('@deepseek-ai/dsh-llm-pi-ai', 'lib/index.js')
 const yaml = await importFromDsh('yaml', 'dist/index.js')
 
-const token = process.env.CNB_TOKEN ?? 'unused-for-this-suite'
+// This suite never touches the network: configureGateway probes before writing, and the
+// stub below answers it. A fixed placeholder keeps the suite runnable without a token.
+const token = 'offline-probe-token'
 const store = new Map()
 const values = new Map()
 
@@ -49,6 +51,14 @@ const ctx = {
   },
   inject() {},
 }
+
+// configureGateway probes before writing, so the gateway must answer here. The point
+// of this file is the overlay handling, not reachability.
+const originalFetch = globalThis.fetch
+globalThis.fetch = async () => new Response(
+  'data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n',
+  { status: 200, headers: { 'content-type': 'text/event-stream' } },
+)
 
 const api = apply(ctx, {})
 await credentials.modifyRecord('dsh-cnb/cnb-token', async () => ({

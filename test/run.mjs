@@ -37,6 +37,7 @@ const suites = [
   ['mini-yaml', 'mini-yaml.test.mjs', false],
   ['qr', 'qr.test.mjs', false],
   ['gateway-overlay', 'gateway-overlay.test.mjs', false],
+  ['gateway-autopick', 'gateway-autopick.test.mjs', false],
   ['host-smoke', 'host-smoke.mjs', true],
 ]
 

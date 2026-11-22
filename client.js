@@ -1471,14 +1471,39 @@ window.__ModuleLoader__.load({
         }
       }, [model, repo])
 
+      // Discover a repository that answers instead of requiring one: the gateway only
+      // accepts a pipeline token, and that token works for exactly one repository, so
+      // the useful choice is whichever probe succeeds.
+      const autopick = useCallback(async () => {
+        setBusy(true)
+        setError(null)
+        setMessage(null)
+        try {
+          const found = await callApi('gateway.autopick', { model, preferred: repo.trim() || undefined })
+          if (found.found === true) {
+            setRepo(found.repo)
+            setProbe({ ...found, reachable: true })
+            setMessage(`已选择 ${found.repo}（第 ${found.checked} 个探测）`)
+          } else {
+            setProbe({ ...found, reachable: false })
+            setError(`${found.reason}。${found.fix}`)
+          }
+        } catch (autopickError) {
+          setError(autopickError.message)
+        } finally {
+          setBusy(false)
+        }
+      }, [model, repo])
+
       const configure = useCallback(async () => {
         setBusy(true)
         setError(null)
         setMessage(null)
         setOverlay(null)
         try {
+          // Empty repo means "choose one for me".
           const result = await callApi('gateway.configure', {
-            repo: repo.trim(),
+            repo: repo.trim() || undefined,
             route: route.trim() || 'cnb-gateway',
             model: model.trim(),
             makeDefault,
@@ -1518,7 +1543,7 @@ window.__ModuleLoader__.load({
             { className: 'dcnb-grid' },
             h('input', {
               className: 'dcnb-input',
-              placeholder: '提供网关的仓库 group/name',
+              placeholder: '仓库 group/name（留空则自动选择能用的）',
               value: repo,
               onChange: (event) => setRepo(event.target.value),
             }),
@@ -1544,8 +1569,10 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { className: 'dcnb-row', style: { marginTop: 10 } },
+            h('button', { className: 'dcnb-btn', disabled: busy, onClick: autopick }, '自动选一个能用的仓库'),
             h('button', { className: 'dcnb-btn', disabled: busy || repo.trim() === '', onClick: runProbe }, '测试调用'),
-            h('button', { className: 'dcnb-btn', 'data-tone': 'primary', disabled: busy || repo.trim() === '', onClick: configure }, '一键配置到 dsh'),
+            // No repository required: configure discovers one when the field is empty.
+            h('button', { className: 'dcnb-btn', 'data-tone': 'primary', disabled: busy, onClick: configure }, '一键配置到 dsh'),
           ),
         ),
         probe === null
@@ -1568,7 +1595,37 @@ window.__ModuleLoader__.load({
                 h('dd', { className: 'dcnb-mono' }, probe.reasoning ? probe.reasoning : '—'),
                 h('dt', null, '用量'),
                 h('dd', { className: 'dcnb-mono' }, probe.usage ? JSON.stringify(probe.usage) : '—'),
+                probe.checked === undefined ? null : h('dt', null, '探测数量'),
+                probe.checked === undefined ? null : h('dd', null, `${probe.checked} 个`),
               ),
+              // When nothing worked, name the cause and the fix rather than only the
+              // raw platform text: the three failures need three different replies.
+              probe.reachable === false && probe.fix
+                ? h(Banner, { tone: 'error' }, `${probe.reason}。${probe.fix}`)
+                : null,
+              Array.isArray(probe.considered) && probe.considered.length > 1
+                ? h(
+                    'details',
+                    { style: { marginTop: 8 } },
+                    h('summary', { className: 'dcnb-muted', style: { fontSize: 11, cursor: 'pointer' } }, `逐项结果（${probe.considered.length}）`),
+                    h(
+                      'div',
+                      { className: 'dcnb-list', style: { marginTop: 6 } },
+                      probe.considered.map((entry) =>
+                        h(
+                          'div',
+                          { key: entry.repo, className: 'dcnb-row' },
+                          h('span', { className: 'dcnb-mono', style: { flex: 1 } }, entry.repo),
+                          h(
+                            'span',
+                            { className: 'dcnb-tag', 'data-tone': entry.reachable ? 'ok' : 'warn' },
+                            entry.reachable ? '可用' : GATEWAY_BLOCKERS[entry.kind] ?? '不可用',
+                          ),
+                        ),
+                      ),
+                    ),
+                  )
+                : null,
             ),
         overlay === null
           ? null
