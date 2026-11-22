@@ -1596,6 +1596,36 @@ window.__ModuleLoader__.load({
         null,
         error === null ? null : h(Banner, null, error),
         message === null ? null : h(Banner, { tone: 'ok' }, message),
+        // A deployment can own this configuration through --patch. Say so, and say what
+        // that layer is, instead of offering a write the platform will refuse.
+        Array.isArray(status?.overriddenBy) && status.overriddenBy.length > 0
+          ? h(
+              Card,
+              { title: '配置由更高优先级层接管' },
+              h(
+                'p',
+                { className: 'dcnb-muted', style: { margin: '0 0 8px', lineHeight: 1.7 } },
+                '这个 profile 启动时带了下面的覆盖层，它里面已经定义了 llm-pi-ai。插件写在下层会被它覆盖，DSH 因此拒绝写入——这是配置层级，不是故障。',
+              ),
+              h(
+                'div',
+                { className: 'dcnb-list' },
+                status.overriddenBy.map((layer) =>
+                  h(
+                    'div',
+                    { key: layer.value, className: 'dcnb-row' },
+                    h('span', { className: 'dcnb-tag' }, layer.key),
+                    h('span', { className: 'dcnb-mono', style: { flex: 1, wordBreak: 'break-all' } }, layer.value),
+                  ),
+                ),
+              ),
+              h(
+                'p',
+                { className: 'dcnb-muted', style: { margin: '8px 0 0', fontSize: 11, lineHeight: 1.6 } },
+                '如果这些配置能让模型正常对话，就保持原样；插件不会改动它。下面的一键配置只在没有现成配置时才有意义。',
+              ),
+            )
+          : null,
         h(
           Card,
           { title: 'CNB 网关反代模型' },
