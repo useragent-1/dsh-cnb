@@ -45,6 +45,7 @@ const suites = [
   ['ambient-token', 'ambient-token.test.mjs', false],
   ['usage-live', 'usage-live.test.mjs', false],
   ['provider-wiring', 'provider-wiring.test.mjs', false],
+  ['model-catalog', 'model-catalog.test.mjs', false],
   ['host-smoke', 'host-smoke.mjs', true],
 ]
 
