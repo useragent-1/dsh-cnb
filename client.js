@@ -645,10 +645,12 @@ window.__ModuleLoader__.load({
         async (fn, label) => {
           setActionError(null)
           try {
-            await fn()
+            const result = await fn()
             workspaces.reload()
             if (repo.trim() !== '') detail.reload()
-            setActionError(`${label}已提交`)
+            if (result?.alreadyStopped === true) setActionError(`${label}：该环境已经结束`)
+            else if (result?.via === 'build') setActionError(`${label}已提交（经仓库级流水线停止）`)
+            else setActionError(`${label}已提交`)
           } catch (error) {
             setActionError(error.message)
           }
@@ -728,7 +730,7 @@ window.__ModuleLoader__.load({
                           'button',
                           {
                             className: 'dcnb-btn',
-                            onClick: () => act(() => callApi('workspaces.stop', { sn: workspace.sn }), '停止环境'),
+                            onClick: () => act(() => callApi('workspaces.stop', { repo: workspace.slug, sn: workspace.sn }), '停止环境'),
                           },
                           '停止',
                         ),
@@ -739,7 +741,7 @@ window.__ModuleLoader__.load({
                             'data-tone': 'danger',
                             onClick: () => {
                               if (!window.confirm(`确定删除环境 ${workspace.sn}？`)) return
-                              act(() => callApi('workspaces.delete', { sn: workspace.sn }), '删除环境')
+                              act(() => callApi('workspaces.delete', { repo: workspace.slug, sn: workspace.sn }), '删除环境')
                             },
                           },
                           '删除',

@@ -54,6 +54,20 @@ group-resource:rw  group-manage:rw  group-delete:rw
 mission-delete:rw  mission-manage:rw
 ```
 
+### 权限不足时的替代路径
+
+两项权限没有放宽的余地，但**停止环境**有一条等价的替代路径：
+
+| 操作 | 账号级接口 | 需要 | 替代路径 | 需要 |
+|---|---|---|---|---|
+| 停止环境 | `POST /workspace/stop` | `account-engage:rw` | `POST /{repo}/-/build/stop/{sn}` | `repo-cnb-trigger:rw` |
+| 删除环境 | `POST /workspace/delete` | `account-engage:rw` | 无 | — |
+| 新建仓库 | `POST /{slug}/-/repos` | `group-resource:rw` | 无 | — |
+
+停止环境时插件先走账号级接口；若返回缺 `account-engage`，自动改走仓库级流水线停止（只需 `repo-cnb-trigger:rw`，也就是启动环境本来就需要的权限），面板会标注「经仓库级流水线停止」。已结束的流水线返回 422，插件识别为「该环境已经结束」而不是失败。为此 `workspaces.stop` 接受 `repo` 参数；面板在列表里会自动带上。
+
+删除环境与新建仓库只有组织/账号级接口，没有替代路径——这两项确实需要全权限令牌。
+
 **级别后缀是必须的。** CNB 的授权项写法是 `<group>-<code>:<level>`。只发 `repo-code`（不带 `:r`/`:rw`）时，创建接口不会报错，但签出的令牌**不含任何有效权限**——之后每个调用都返回 `10023`，看起来就像账号没有权限。这就是为什么列表要现取现算，并且 `test/scopes.test.mjs` 会逐项断言级别存在且合法。
 
 想只授权这个插件用到的部分，把 `profile` 换成 `plugin`：11 项，覆盖仓库、组织、身份与环境控制，不含制品库与任务集。
@@ -124,7 +138,7 @@ Authorization: Bearer <CNB token>
 | `cnb_repo_delete` | `repo` `confirm` | 删仓库（必须 `confirm: true`） |
 | `cnb_workspaces` | `repo` `status` | 环境列表 |
 | `cnb_workspace_open` | `repo` `branch` | 启动/复用环境，返回 WebIDE 地址 |
-| `cnb_workspace_control` | `action` `sn` `pipelineId` | 停止或删除环境 |
+| `cnb_workspace_control` | `action` `repo` `sn` `pipelineId` | 停止或删除环境（`repo` 让停止可改走仓库级） |
 | `cnb_usage` | `slug` `month` | 组织额度与用量 |
 | `cnb_gateway_probe` | `repo` `model` `prompt` | 网关真实调用 |
 | `cnb_gateway_configure` | `repo` `route` `model` `makeDefault` | 写入 `llm-pi-ai` 路由 |
