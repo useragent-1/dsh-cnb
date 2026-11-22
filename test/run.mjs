@@ -43,6 +43,7 @@ const suites = [
   ['neutralize', 'neutralize.test.mjs', false],
   ['onboarding', 'onboarding.test.mjs', false],
   ['ambient-token', 'ambient-token.test.mjs', false],
+  ['usage-live', 'usage-live.test.mjs', false],
   ['host-smoke', 'host-smoke.mjs', true],
 ]
 

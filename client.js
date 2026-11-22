@@ -1388,6 +1388,32 @@ window.__ModuleLoader__.load({
 
     function UsageTab({ status }) {
       const usage = useApiState(() => callApi('usage.list', {}), [])
+      const [live, setLive] = useState(true)
+      const [tick, setTick] = useState(0)
+
+      /**
+       * Consumption moves while the tab is open — a build finishes, an environment
+       * runs — so the numbers are re-read on a timer instead of once at mount. The
+       * quota endpoint is cheap and the interval is deliberately relaxed: this is a
+       * dashboard, not a counter, and hammering the API would slow the panel down for
+       * no benefit.
+       */
+      useEffect(() => {
+        if (!live || !status?.loggedIn) return undefined
+        const timer = setInterval(() => {
+          usage.reload()
+          setTick((value) => value + 1)
+        }, 30_000)
+        return () => clearInterval(timer)
+      }, [live, status?.loggedIn, usage])
+
+      useEffect(() => {
+        // A tab left in the background should not keep polling.
+        const onVisibility = () => setLive(document.visibilityState !== 'hidden')
+        document.addEventListener('visibilitychange', onVisibility)
+        return () => document.removeEventListener('visibilitychange', onVisibility)
+      }, [])
+
       if (!status?.loggedIn) return h(Banner, { tone: 'error' }, '请先在「账号」页扫码登录 CNB')
       if (usage.status === 'loading' && usage.data === null) return h(Spinner, { label: '读取用量…' })
       if (usage.status === 'error') return h(Banner, null, usage.error)
@@ -1403,7 +1429,14 @@ window.__ModuleLoader__.load({
           { className: 'dcnb-row' },
           h('span', { className: 'dcnb-muted' }, `统计月份 ${usage.data?.month ?? '—'}`),
           h('span', { className: 'dcnb-spacer' }),
-          h('button', { className: 'dcnb-btn', onClick: usage.reload }, '刷新'),
+          h(
+            'label',
+            { className: 'dcnb-row', style: { gap: 6 } },
+            h('input', { type: 'checkbox', checked: live, onChange: (event) => setLive(event.target.checked) }),
+            h('span', { className: 'dcnb-muted', style: { fontSize: 11 } }, live ? '每 30 秒自动刷新' : '已暂停刷新'),
+          ),
+          h('button', { className: 'dcnb-btn', onClick: usage.reload }, usage.status === 'loading' ? '刷新中…' : '刷新'),
+          tick > 0 ? h('span', { className: 'dcnb-muted', style: { fontSize: 11 } }, `已刷新 ${tick} 次`) : null,
         ),
         groups.map((group) =>
           h(
