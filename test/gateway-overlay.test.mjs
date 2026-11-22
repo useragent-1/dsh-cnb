@@ -79,7 +79,9 @@ const piAiRow = rows.find((row) => row.id === 'llm-pi-ai')
 const parsed = PiAiConfig(piAiRow.config)
 assert.ok(parsed, 'snippet llm-pi-ai config must pass the real schema')
 assert.equal(piAiRow.config.providers['cnb-gateway'].baseURL, 'https://api.cnb.cool/acme/alpha/-/ai')
-assert.equal(piAiRow.config.providers['cnb-gateway'].apiKeyEnv, 'CNB_TOKEN')
+// The provider reads the gateway credential, not the sign-in one: a personal token in
+// CNB_TOKEN would make every gateway call fail with [NO_RIGHT].
+assert.equal(piAiRow.config.providers['cnb-gateway'].apiKeyEnv, 'CNB_GATEWAY_TOKEN')
 
 const defaultRow = rows.find((row) => row.id === 'agent-default-model')
 assert.deepEqual(defaultRow.config, { provider: 'cnb-gateway', model: 'deepseek-v4.1-flash' })

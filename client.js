@@ -1540,7 +1540,15 @@ window.__ModuleLoader__.load({
           const result = await callApi('gateway.importToken', { token: gatewayToken.trim(), repo: repo.trim() || undefined })
           setGatewayToken('')
           setGateway({ stored: true, repo: result.repo })
-          setMessage(`网关令牌已保存，可用于 ${result.repo}`)
+          // Say whether the provider was registered too: a saved token without one is
+          // the state that reads as "imported but nothing appears".
+          if (result.provider?.written === true) {
+            setMessage(`网关令牌已保存，并已在 dsh 配置中注册 provider「${result.provider.route}」，重启后模型选择器可见`)
+          } else if (result.provider?.overridden === true) {
+            setMessage(`网关令牌已保存（${result.repo}）。但 llm-pi-ai 由更高优先级的 --patch 层接管，插件不写入 provider —— 模型选择器里不会出现插件这一路。`)
+          } else {
+            setMessage(`网关令牌已保存，可用于 ${result.repo}${result.provider?.reason ? `。未注册 provider：${result.provider.reason}` : ''}`)
+          }
           if (repo.trim() === '') setRepo(result.repo)
         } catch (importError) {
           setError(importError.message)
