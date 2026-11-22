@@ -1516,6 +1516,27 @@ window.__ModuleLoader__.load({
         }
       }, [gatewayToken, repo])
 
+      // A first-time user has no pipeline token and cannot be handed one: the gateway
+      // refuses personal tokens, and a pipeline token only exists inside a running
+      // environment. Starting one and pointing at the exact command is the shortest
+      // honest path.
+      const [guide, setGuide] = useState(null)
+      const startForToken = useCallback(async () => {
+        setBusy(true)
+        setError(null)
+        setMessage(null)
+        setGuide(null)
+        try {
+          const result = await callApi('gateway.guide', { repo: repo.trim() || undefined })
+          setGuide(result)
+          if (repo.trim() === '') setRepo(result.repo)
+        } catch (guideError) {
+          setError(guideError.message)
+        } finally {
+          setBusy(false)
+        }
+      }, [repo])
+
       // Discover a repository that answers instead of requiring one: the gateway only
       // accepts a pipeline token, and that token works for exactly one repository, so
       // the useful choice is whichever probe succeeds.
@@ -1623,12 +1644,15 @@ window.__ModuleLoader__.load({
                 onChange: (event) => setGatewayToken(event.target.value),
               }),
               h('button', { className: 'dcnb-btn', disabled: busy || gatewayToken.trim() === '', onClick: importGateway }, '导入网关令牌'),
+            gateway === null || gateway.stored !== true
+              ? h('button', { className: 'dcnb-btn', disabled: busy, onClick: startForToken }, '帮我启动一个环境')
+              : null,
             ),
             h(
               'p',
               { className: 'dcnb-muted', style: { margin: '6px 0 0', fontSize: 11, lineHeight: 1.6 } },
-              gateway === null
-                ? 'AI 网关只接受流水线令牌，个人访问令牌会被拒绝。在任意仓库启动一次云环境，把环境里的 CNB_TOKEN 粘到这里。'
+              gateway === null || gateway.stored !== true
+                ? 'AI 网关只接受流水线令牌，个人访问令牌会被拒绝。点下面的「帮我启动一个环境」可以少走几步。'
                 : `已导入网关令牌${gateway.repo ? `（用于 ${gateway.repo}）` : ''}。登录用的令牌与它分开保存，互不覆盖。`,
             ),
           ),
@@ -1641,6 +1665,25 @@ window.__ModuleLoader__.load({
             h('button', { className: 'dcnb-btn', 'data-tone': 'primary', disabled: busy, onClick: configure }, '一键配置到 dsh'),
           ),
         ),
+        guide === null
+          ? null
+          : h(
+              Card,
+              { title: `取得网关令牌 · ${guide.repo}` },
+              h(
+                'ol',
+                { style: { margin: '0 0 10px', paddingLeft: 18, fontSize: 12, lineHeight: 1.9 } },
+                guide.steps.map((step) => h('li', { key: step }, step)),
+              ),
+              h('div', { className: 'dcnb-row' },
+                guide.webideUrl
+                  ? h('a', { className: 'dcnb-btn', href: guide.webideUrl, target: '_blank', rel: 'noreferrer noopener', style: { textDecoration: 'none' } }, '打开 WebIDE')
+                  : null,
+                h('button', { className: 'dcnb-btn', onClick: () => { if (navigator.clipboard?.writeText) navigator.clipboard.writeText('echo $CNB_TOKEN').catch(() => {}) } }, '复制命令'),
+                h('button', { className: 'dcnb-btn', onClick: () => setGuide(null) }, '关闭'),
+              ),
+              h('p', { className: 'dcnb-muted', style: { margin: '8px 0 0', fontSize: 11, lineHeight: 1.6 } }, guide.note),
+            ),
         probe === null
           ? null
           : h(
