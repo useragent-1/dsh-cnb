@@ -39,6 +39,7 @@ const suites = [
   ['gateway-overlay', 'gateway-overlay.test.mjs', false],
   ['gateway-autopick', 'gateway-autopick.test.mjs', false],
   ['client-identifiers', 'client-identifiers.test.mjs', false],
+  ['gateway-token', 'gateway-token.test.mjs', false],
   ['host-smoke', 'host-smoke.mjs', true],
 ]
 

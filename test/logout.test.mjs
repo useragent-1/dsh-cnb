@@ -68,13 +68,19 @@ const seeded = () => ({
   }
 }
 
-// --- case 2: the credential reference is cleared with it ---------------------
+// --- case 2: logging out must not disturb the gateway credential ------------
 {
-  const { api, calls } = faithfulStore(seeded())
+  // The gateway token is a separate credential with its own reference; signing out of
+  // the panel has nothing to say about it.
+  const { api, calls } = faithfulStore({
+    ...seeded(),
+    'dsh-cnb/gateway-token': { kind: 'grant', payload: { token: 'pipeline-token', savedAt: new Date().toISOString() } },
+  })
   globalThis.fetch = async () => json(401, { errcode: 16, errmsg: 'not logged in' })
   try {
     await api.runOperation('login.logout', {})
-    assert.ok(calls.includes('unset:CNB_TOKEN'), 'the CNB_TOKEN reference must not outlive the sign-in')
+    assert.ok(!calls.some((call) => call.includes('gateway-token')), 'the gateway credential must survive a logout')
+    assert.ok(!calls.includes('unset:CNB_GATEWAY_TOKEN'), 'and so must its reference')
   } finally {
     globalThis.fetch = originalFetch
   }
@@ -128,4 +134,4 @@ const seeded = () => ({
   }
 }
 
-console.log('logout OK · deleteRecord used, reference cleared, no account resurrection')
+console.log('logout OK · deleteRecord used, account cleared, gateway credential preserved')

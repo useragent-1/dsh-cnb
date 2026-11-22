@@ -1469,6 +1469,8 @@ window.__ModuleLoader__.load({
       const [error, setError] = useState(null)
       const [message, setMessage] = useState(null)
       const [overlay, setOverlay] = useState(null)
+      const [gatewayToken, setGatewayToken] = useState('')
+      const [gateway, setGateway] = useState(null)
       const [busy, setBusy] = useState(false)
 
       const runProbe = useCallback(async () => {
@@ -1484,6 +1486,35 @@ window.__ModuleLoader__.load({
           setBusy(false)
         }
       }, [model, repo])
+
+      const loadGatewayToken = useCallback(async () => {
+        try {
+          setGateway(await callApi('gateway.token', {}))
+        } catch {
+          setGateway({ stored: false })
+        }
+      }, [])
+
+      useEffect(() => { void loadGatewayToken() }, [loadGatewayToken])
+
+      // Importing is verified before it is kept, so a personal token is refused here
+      // rather than stored and failing on every later request.
+      const importGateway = useCallback(async () => {
+        setBusy(true)
+        setError(null)
+        setMessage(null)
+        try {
+          const result = await callApi('gateway.importToken', { token: gatewayToken.trim(), repo: repo.trim() || undefined })
+          setGatewayToken('')
+          setGateway({ stored: true, repo: result.repo })
+          setMessage(`网关令牌已保存，可用于 ${result.repo}`)
+          if (repo.trim() === '') setRepo(result.repo)
+        } catch (importError) {
+          setError(importError.message)
+        } finally {
+          setBusy(false)
+        }
+      }, [gatewayToken, repo])
 
       // Discover a repository that answers instead of requiring one: the gateway only
       // accepts a pipeline token, and that token works for exactly one repository, so
@@ -1578,6 +1609,27 @@ window.__ModuleLoader__.load({
               { className: 'dcnb-row', style: { gap: 6 } },
               h('input', { type: 'checkbox', checked: makeDefault, onChange: (event) => setMakeDefault(event.target.checked) }),
               h('span', null, '同时设为默认模型'),
+            ),
+          ),
+          h(
+            'div',
+            { className: 'dcnb-field', style: { marginTop: 12 } },
+            h('div', { className: 'dcnb-row' },
+              h('input', {
+                className: 'dcnb-input',
+                type: 'password',
+                placeholder: '粘贴流水线令牌（环境里的 CNB_TOKEN）',
+                value: gatewayToken,
+                onChange: (event) => setGatewayToken(event.target.value),
+              }),
+              h('button', { className: 'dcnb-btn', disabled: busy || gatewayToken.trim() === '', onClick: importGateway }, '导入网关令牌'),
+            ),
+            h(
+              'p',
+              { className: 'dcnb-muted', style: { margin: '6px 0 0', fontSize: 11, lineHeight: 1.6 } },
+              gateway === null
+                ? 'AI 网关只接受流水线令牌，个人访问令牌会被拒绝。在任意仓库启动一次云环境，把环境里的 CNB_TOKEN 粘到这里。'
+                : `已导入网关令牌${gateway.repo ? `（用于 ${gateway.repo}）` : ''}。登录用的令牌与它分开保存，互不覆盖。`,
             ),
           ),
           h(
