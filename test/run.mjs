@@ -31,6 +31,7 @@ const suites = [
   ['session-only', 'session-only.test.mjs', false],
   ['token-name', 'token-name.test.mjs', false],
   ['new-repo-start', 'new-repo-start.test.mjs', false],
+  ['delete-root-group', 'delete-root-group.test.mjs', false],
   ['session-fallback', 'session-fallback.test.mjs', false],
   ['session-capability', 'session-capability.test.mjs', false],
   ['mini-yaml', 'mini-yaml.test.mjs', false],

@@ -991,7 +991,7 @@ window.__ModuleLoader__.load({
                             disabled: busy,
                             onClick: () => {
                               if (!window.confirm(`确定删除 ${repo.slug}？该操作会删除仓库全部数据。`)) return
-                              act('删除仓库', () => callApi('repos.delete', { repo: repo.slug, confirm: true }))
+                              act('删除仓库', () => callApi('repos.delete', { repo: repo.slug, confirm: true })).then(() => repos.reload())
                             },
                           },
                           '删除',
