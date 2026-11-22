@@ -20,6 +20,7 @@ const suites = [
   ['grants', 'grants.test.mjs', false],
   ['mint-verify', 'mint-verify.test.mjs', false],
   ['session-remint', 'session-remint.test.mjs', false],
+  ['workspace-open', 'workspace-open.test.mjs', false],
   ['mini-yaml', 'mini-yaml.test.mjs', false],
   ['qr', 'qr.test.mjs', false],
   ['gateway-overlay', 'gateway-overlay.test.mjs', false],

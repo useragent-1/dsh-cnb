@@ -125,6 +125,10 @@ CNB 的创建接口对一份"授予不了任何权限"的 scope 也返回成功�
 
 ## 云原生开发
 
+启动环境时 `branch` 是必填的（CNB 对空 body 直接答 `[PARAM_MISS]branch is required`，只给 `ref` 也不行）。所以省略 branch 时插件自己解析：仓库对象**没有** `default_branch` 字段，于是读取分支列表，优先 `main`、其次 `master`、否则取第一个。显式给了 branch 就完全不做这次查询。
+
+重开一个已存在的环境时 CNB 只返回 URL、不返回 `sn`，而 `sn` 是之后停止环境要用的。插件从 URL 的 `sn=` 参数里取回来，所以「启动 → 停止」能闭环。
+
 「开发环境」页列出当前账号的全部环境（运行中/已关闭），可直接打开 WebIDE、停止或删除。查询某个仓库时会额外读取默认分支的 `.cnb/settings.yml`，把开发按钮的 `name` / `description` / `hoverImage` / `cpus` / `disabled` / `autoOpenWebIDE` 显示出来，并列出该仓库已有环境。
 
 ## 组织用量

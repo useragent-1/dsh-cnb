@@ -591,7 +591,12 @@ window.__ModuleLoader__.load({
                           {
                             className: 'dcnb-btn',
                             disabled: busy,
-                            onClick: () => act('启动开发环境', () => callApi('workspaces.open', { repo: repo.slug })),
+                            onClick: () =>
+                            act('启动开发环境', async () => {
+                              const started = await callApi('workspaces.open', { repo: repo.slug })
+                              if (typeof started.url === 'string') window.open(started.url, '_blank', 'noopener')
+                              return started
+                            }),
                           },
                           '启动开发',
                         ),
@@ -815,7 +820,12 @@ window.__ModuleLoader__.load({
                 className: 'dcnb-btn',
                 'data-tone': 'primary',
                 disabled: repo.trim() === '',
-                onClick: () => act(() => callApi('workspaces.open', { repo: repo.trim() }), '启动开发环境'),
+                onClick: () =>
+                  act(async () => {
+                    const started = await callApi('workspaces.open', { repo: repo.trim() })
+                    if (typeof started.url === 'string') window.open(started.url, '_blank', 'noopener')
+                    return started
+                  }, '启动开发环境'),
               },
               '启动开发',
             ),
