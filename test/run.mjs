@@ -26,6 +26,7 @@ const suites = [
   ['address-cache', 'address-cache.test.mjs', false],
   ['client-links', 'client-links.test.mjs', false],
   ['login-days', 'login-days.test.mjs', false],
+  ['logout', 'logout.test.mjs', false],
   ['session-fallback', 'session-fallback.test.mjs', false],
   ['session-capability', 'session-capability.test.mjs', false],
   ['mini-yaml', 'mini-yaml.test.mjs', false],
