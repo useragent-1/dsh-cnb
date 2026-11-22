@@ -200,7 +200,10 @@ window.__ModuleLoader__.load({
       repositories: '仓库列表',
       organizations: '组织列表',
       quota: '组织额度与用量',
-      workspaces: '云原生开发环境',
+      workspaces: '开发环境列表',
+      'workspace-control': '停止 / 删除环境',
+      'repo-create': '新建仓库',
+      'repo-delete': '删除仓库',
     }
 
     // ------------------------------------------------------------------- tabs

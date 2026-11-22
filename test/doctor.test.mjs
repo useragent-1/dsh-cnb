@@ -59,7 +59,7 @@ const signedIn = apply(ctx, {})
 const report = await signedIn.diagnoseToken()
 assert.equal(report.signedIn, true)
 assert.equal(report.healthy, false, 'a powerless token must not read as healthy')
-assert.ok(report.checks.length === 5)
+assert.equal(report.checks.length, 8, 'reads and writes are both probed')
 assert.ok(report.checks.every((check) => check.ok === false))
 // A token CNB rejects outright is a different diagnosis from a scoped one.
 assert.equal(report.rejected, true)
