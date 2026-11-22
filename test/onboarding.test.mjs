@@ -94,7 +94,10 @@ function harness() {
   const panel = readFileSync(new URL('../client.js', import.meta.url), 'utf8')
   // The refusal is about the credential type, so the wording must say so.
   assert.match(source, /个人访问令牌无法调用网关|个人令牌/, 'the limitation is stated')
-  assert.match(panel, /个人访问令牌会被拒绝/, 'and the panel repeats it where the input is')
+  // The panel must state the limitation where the input is, but the wording now depends
+  // on what actually happened: adopted, blocked by an overlay, or absent.
+  assert.match(panel, /AI 网关只接受流水线令牌|流水线令牌/, 'the requirement is stated at the input')
+  assert.match(panel, /describeGatewayState/, 'and the state is described from the real result, not a fixed line')
   // No code path may store a personal token as the gateway key.
   assert.ok(!/writeGatewayToken\([^)]*personal/i.test(source))
 }

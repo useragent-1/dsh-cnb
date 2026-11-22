@@ -310,6 +310,35 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * One sentence describing the gateway's real state.
+     *
+     * The distinction that matters: whether a token is present, and whether DSH accepted
+     * a provider for it. A token adopted automatically but blocked from the config by a
+     * `--patch` layer looks, from the outside, exactly like "nothing was configured" — so
+     * the wording has to separate the two, or it tells someone to fetch a token they
+     * already have.
+     */
+    function describeGatewayState(gateway, status) {
+      const adoption = status?.gatewayAdoption
+      const stored = gateway?.stored === true
+      const repo = gateway?.repo ?? adoption?.repo ?? null
+
+      if (stored) {
+        if (adoption?.provider?.overridden === true) {
+          return `网关令牌已就绪${repo ? `（${repo}）` : ''}。但 llm-pi-ai 由更高优先级的 --patch 层接管，插件不写入 provider —— 模型选择器里不会出现插件这一路，你现有的配置不受影响。`
+        }
+        return `网关令牌已就绪${repo ? `（${repo}）` : ''}。登录用的令牌与它分开保存，互不覆盖。`
+      }
+      if (adoption?.adopted === true) {
+        return `已自动导入环境里的 CNB_TOKEN${repo ? `（${repo}）` : ''}，正在进行最后一步。`
+      }
+      if (status?.ambient?.token === false) {
+        return '这个进程不在 CNB 云环境里，没有可继承的 CNB_TOKEN。在云环境里启动会自动获取；否则需要手动粘贴一个流水线令牌。'
+      }
+      return 'AI 网关只接受流水线令牌。点「帮我启动一个环境」会给你确切的三步。'
+    }
+
+    /**
      * Plain-language names for the gateway refusal categories.
      *
      * The Host classifies a refusal by cause, because the three cases need three
@@ -1722,9 +1751,7 @@ window.__ModuleLoader__.load({
             h(
               'p',
               { className: 'dcnb-muted', style: { margin: '6px 0 0', fontSize: 11, lineHeight: 1.6 } },
-              gateway === null || gateway.stored !== true
-                ? 'AI 网关只接受流水线令牌，个人访问令牌会被拒绝。点下面的「帮我启动一个环境」可以少走几步。'
-                : `已导入网关令牌${gateway.repo ? `（用于 ${gateway.repo}）` : ''}。登录用的令牌与它分开保存，互不覆盖。`,
+              describeGatewayState(gateway, status),
             ),
           ),
           h(
