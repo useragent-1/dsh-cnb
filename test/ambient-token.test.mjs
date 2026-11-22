@@ -164,3 +164,37 @@ const signIn = () => ({ 'dsh-cnb/cnb-token': { kind: 'grant', payload: { token: 
 }
 
 console.log('ambient-token OK · injected token adopted silently, deliberate choices preserved')
+
+// --- case 6: a secret imported through .cnb.yml is adopted too ----------
+{
+  // The point of this one: a repository configured with `imports` gets the token under
+  // the secret file's own variable name, not CNB_TOKEN. Accepting that name is what makes
+  // "configure once, works in every new repository" true.
+  const previousToken = process.env.CNB_TOKEN
+  const previousGateway = process.env.CNB_GATEWAY_TOKEN
+  const previousRepo = process.env.CNB_REPO_SLUG
+  delete process.env.CNB_TOKEN
+  process.env.CNB_GATEWAY_TOKEN = 'imported-secret-token'
+  process.env.CNB_REPO_SLUG = 'acme/alpha'
+  const { api, records } = harness(signIn())
+  globalThis.fetch = async (url, init) => {
+    assert.match(init?.headers?.authorization ?? '', /imported-secret-token/, 'the imported value is what gets tested')
+    return sse()
+  }
+  try {
+    const result = await api.runOperation('gateway.adoptAmbient', {})
+    assert.equal(result.adopted, true)
+    assert.equal(result.source, 'imported secret', 'and the source is named as such')
+    assert.equal(records.get('dsh-cnb/gateway-token').payload.token, 'imported-secret-token')
+  } finally {
+    if (previousToken === undefined) delete process.env.CNB_TOKEN
+    else process.env.CNB_TOKEN = previousToken
+    if (previousGateway === undefined) delete process.env.CNB_GATEWAY_TOKEN
+    else process.env.CNB_GATEWAY_TOKEN = previousGateway
+    if (previousRepo === undefined) delete process.env.CNB_REPO_SLUG
+    else process.env.CNB_REPO_SLUG = previousRepo
+    globalThis.fetch = originalFetch
+  }
+}
+
+console.log('ambient-token: imported secret case added')

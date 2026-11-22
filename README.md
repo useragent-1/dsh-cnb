@@ -206,6 +206,44 @@ HTTP 400  {"code":11128,"msg":"Illegal API invocation from an unapproved channel
 
 > 移植自 MIT 许可的 cnb2api 中性化实现，见 [LICENSE-cnb2api](LICENSE-cnb2api)。短语表已对真实网关验证。
 
+### 让新仓库自动配好网关（推荐）
+
+网关令牌只对签发它的仓库有效，但它**可以从密钥仓库自动注入**。配置一次，之后任何仓库启动环境都自带令牌，插件读到就直接用——不需要任何人手动粘贴。
+
+**1. 建一个密钥仓库**（[cnb.cool/new/repos](https://cnb.cool/new/repos)，类型选「密钥仓库」），内容：
+
+```yaml
+# env.yml
+CNB_GATEWAY_TOKEN: <你的流水线令牌>
+```
+
+密钥仓库禁止本地 clone，只能在网页编辑，带审计日志。
+
+**2. 在需要网关的仓库里，改 `.cnb.yml`：**
+
+```yaml
+$:
+  vscode:
+    - services:
+        - vscode
+      imports:
+        - https://cnb.cool/<密钥仓库路径>/-/blob/main/env.yml
+```
+
+**3. 完成。** 这个仓库每次启动开发环境，`CNB_GATEWAY_TOKEN` 都会作为环境变量注入；插件启动时自动读取、验证、存为网关令牌。
+
+插件认可三个名字，按此顺序检查：
+
+```
+CNB_TOKEN          ← CNB 自己注入的（云环境自带）
+CNB_API_TOKEN
+CNB_GATEWAY_TOKEN  ← 密钥仓库导入的
+```
+
+所以老仓库不用改，新仓库加两行 `imports` 即可。
+
+> 局限：令牌仍然只对**它所属的那个仓库**有效。用 `k` 的令牌，所有环境都会走 `k` 的网关与额度，这正是「统一一套网关」的做法；想让每个仓库各走各的额度，就得各自注入各自的令牌。
+
 ### 第一次使用的完整路径
 
 网关只接受**流水线令牌**，而这种令牌只存在于运行中的环境里。个人访问令牌既读不到它，也调不了网关（两条 AI 路径都返回 `[NO_RIGHT] OpenAPI only allowed in pipeline`），所以插件无法代你取得。
