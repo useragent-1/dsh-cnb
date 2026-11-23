@@ -2202,6 +2202,23 @@ window.__ModuleLoader__.load({
       }, [])
 
       // 一体化：生成守护配置 + 给出每个环境的处置计划。
+      // 地址自愈：provider 指向的域名若已失效（环境被重启过），自动重新采集并改写。
+      const heal = useCallback(async () => {
+        setBusy(true)
+        setError(null)
+        setNote(null)
+        try {
+          const result = await callApi('keepalive.selfHeal', {})
+          setNote(result.healed
+            ? `地址已自愈：${result.previous ?? '(无)'} → ${result.baseURL}`
+            : result.note)
+        } catch (healError) {
+          setError(healError.message)
+        } finally {
+          setBusy(false)
+        }
+      }, [])
+
       const automate = useCallback(async () => {
         setBusy(true)
         setError(null)
@@ -2278,6 +2295,7 @@ window.__ModuleLoader__.load({
             h('span', { className: 'dcnb-spacer' }),
             h('button', { className: 'dcnb-btn', disabled: busy, onClick: generate }, '生成外部心跳配置'),
             h('button', { className: 'dcnb-btn', 'data-tone': 'primary', disabled: busy, onClick: automate }, busy ? '处理中…' : '一键自动化守护'),
+            h('button', { className: 'dcnb-btn', disabled: busy, onClick: heal }, '地址自愈'),
           ),
           data === null
             ? h(Spinner, { label: '读取环境状态…' })
