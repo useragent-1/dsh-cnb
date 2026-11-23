@@ -2201,6 +2201,25 @@ window.__ModuleLoader__.load({
         }
       }, [])
 
+      // 一体化：生成守护配置 + 给出每个环境的处置计划。
+      const automate = useCallback(async () => {
+        setBusy(true)
+        setError(null)
+        setSnippet(null)
+        try {
+          const result = await callApi('keepalive.automate', {})
+          setSnippet({ ...result, note: result.note ?? `守护配置已就绪（${result.cron}）。` })
+          const urgent = (result.plan ?? []).filter((row) => row.urgent === true)
+          setNote(urgent.length === 0
+            ? '守护配置已生成；当前没有需要立刻处理的环境。'
+            : `守护配置已生成。有 ${urgent.length} 个环境需要关注：` + urgent.map((row) => `${row.repo} → ${row.action}`).join('，'))
+        } catch (automateError) {
+          setError(automateError.message)
+        } finally {
+          setBusy(false)
+        }
+      }, [])
+
       const generate = useCallback(async () => {
         setBusy(true)
         setError(null)
@@ -2258,6 +2277,7 @@ window.__ModuleLoader__.load({
             h('button', { className: 'dcnb-btn', disabled: busy, onClick: probe }, '真打一次验证'),
             h('span', { className: 'dcnb-spacer' }),
             h('button', { className: 'dcnb-btn', disabled: busy, onClick: generate }, '生成外部心跳配置'),
+            h('button', { className: 'dcnb-btn', 'data-tone': 'primary', disabled: busy, onClick: automate }, busy ? '处理中…' : '一键自动化守护'),
           ),
           data === null
             ? h(Spinner, { label: '读取环境状态…' })

@@ -53,6 +53,7 @@ const suites = [
   ['session-adopt', 'session-adopt.test.mjs', false],
   ['provider-route', 'provider-route.test.mjs', false],
   ['keepalive', 'keepalive.test.mjs', false],
+  ['autokeep', 'autokeep.test.mjs', false],
   ['host-smoke', 'host-smoke.mjs', true],
 ]
 
