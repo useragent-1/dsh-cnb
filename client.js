@@ -1793,6 +1793,7 @@ window.__ModuleLoader__.load({
       const [error, setError] = useState(null)
       const [note, setNote] = useState(null)
       const [snippet, setSnippet] = useState(null)
+      const [endpoint, setEndpoint] = useState(null)
       const [pings, setPings] = useState({})
       const [quota, setQuota] = useState(null)
 
@@ -2078,6 +2079,7 @@ window.__ModuleLoader__.load({
         setError(null)
         try {
           setState(await callApi('issue.state', {}))
+          setEndpoint(await callApi('issue.endpoint', {}))
         } catch (loadError) {
           setError(loadError.message)
         } finally {
@@ -2105,6 +2107,25 @@ window.__ModuleLoader__.load({
           setBusy(false)
         }
       }, [model, question])
+
+      // 把反代写成 provider，这样模型选择器里就能直接选它。
+      const writeProvider = useCallback(async () => {
+        setBusy(true)
+        setError(null)
+        try {
+          const result = await callApi('gateway.configure', {
+            baseURL: endpoint.baseURL,
+            models: endpoint.models.map((m) => m.id),
+            route: 'cnb-issue',
+          })
+          setError(null)
+          window.alert(result.written ? '已写入 provider cnb-issue' : (result.reason ?? '未写入'))
+        } catch (writeError) {
+          setError(writeError.message)
+        } finally {
+          setBusy(false)
+        }
+      }, [endpoint])
 
       const showSnippet = useCallback(async () => {
         setBusy(true)
@@ -2193,6 +2214,39 @@ window.__ModuleLoader__.load({
                         },
                       }, answer.answer))
                   : h(Banner, { tone: 'error' }, answer.reason ?? '没有拿到答案'),
+              ),
+        ),
+
+        h(
+          Card,
+          { title: '反向代理', extra: h('span', { className: 'dcnb-muted' }, 'OpenAI 兼容') },
+          h(
+            'p',
+            { className: 'dcnb-muted', style: { margin: '0 0 10px', lineHeight: 1.7 } },
+            '把这条路径包成标准接口，可以直接当 provider 用 —— 不需要为它改任何客户端。',
+            h('br'),
+            h('strong', null, '每次请求都会起一个一次性容器'),
+            '，实测单次约 10 秒起；并发 ',
+            String(endpoint === null ? '?' : endpoint.concurrency),
+            '，超出的排队。',
+          ),
+          endpoint === null
+            ? h(Spinner, { label: '读取地址…' })
+            : h(React.Fragment, null,
+                h('div', { className: 'dcnb-kv' },
+                  h('dt', null, 'baseURL'),
+                  h('dd', { className: 'dcnb-mono' }, endpoint.baseURL),
+                  h('dt', null, '可用模型'),
+                  h('dd', null, endpoint.models.map((m) => m.id).join(' · ')),
+                ),
+                h('div', { className: 'dcnb-row', style: { marginTop: 10 } },
+                  h('button', {
+                    className: 'dcnb-btn',
+                    onClick: () => { if (navigator.clipboard?.writeText) navigator.clipboard.writeText(endpoint.baseURL).catch(() => {}) },
+                  }, '复制 baseURL'),
+                  h('button', { className: 'dcnb-btn', disabled: busy, onClick: () => void writeProvider() }, '写入 provider'),
+                ),
+                h('div', { className: 'dcnb-muted', style: { marginTop: 8, fontSize: 11, lineHeight: 1.7 } }, endpoint.note),
               ),
         ),
 
