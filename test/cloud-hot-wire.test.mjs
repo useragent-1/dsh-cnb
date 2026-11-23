@@ -203,3 +203,34 @@ function harness(options = {}) {
   assert.deepEqual(Object.keys(providers), ['cnb-gateway'], 'exactly one route remains')
   assert.equal(providers['cnb-gateway'].baseURL, 'https://y/v1', 'and it holds the new value')
 }
+
+// --- 6. 模型条目只能用 pi-ai schema 认识的键 -------------------------
+//
+// pi-ai 的 `modelProfile` 只接受 id / name / contextWindow / maxTokens / input /
+// reasoningEfforts / compat。写别的键（比如 `reasoning: true`）不会报错 ——
+// schema 静默忽略 —— 于是「我明明标了推理模型」变成一句空话。实测踩过。
+{
+  const { api, patchFile } = harness()
+  await api.wireCloudProvider({
+    repo: 'a/b',
+    baseURL: 'https://x/v1',
+    key: 'k',
+    // 一个普通模型 + 一个推理模型（describeModel 会给 reasoning: true）
+    models: ['deepseek-v4.1-flash', 'hy4'],
+    route: 'cnb-gateway',
+    makeDefault: false,
+  })
+  const parsed = yaml.parse(readFileSync(patchFile, 'utf8'))
+  const models = parsed.find((row) => row.id === 'llm-pi-ai').config.providers['cnb-gateway'].models
+  const ALLOWED = new Set(['id', 'name', 'contextWindow', 'maxTokens', 'input', 'reasoningEfforts', 'compat'])
+  for (const model of models) {
+    const unknown = Object.keys(model).filter((key) => !ALLOWED.has(key))
+    assert.deepEqual(unknown, [], `${model.id} must not carry keys pi-ai silently drops`)
+  }
+  // 推理能力要真的落到 reasoningEfforts 上。
+  const hy4 = models.find((model) => model.id === 'hy4')
+  assert.ok(hy4.reasoningEfforts !== undefined, 'a reasoning model declares its efforts')
+  assert.equal(hy4.reasoningEfforts.low, 'low')
+  assert.equal(hy4.reasoningEfforts.high, 'high')
+  assert.equal(hy4.reasoning, undefined, 'and not a field nobody reads')
+}
