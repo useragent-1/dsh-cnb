@@ -54,6 +54,7 @@ const suites = [
   ['provider-route', 'provider-route.test.mjs', false],
   ['keepalive', 'keepalive.test.mjs', false],
   ['autokeep', 'autokeep.test.mjs', false],
+  ['immortal', 'immortal.test.mjs', false],
   ['host-smoke', 'host-smoke.mjs', true],
 ]
 
