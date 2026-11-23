@@ -2119,13 +2119,11 @@ window.__ModuleLoader__.load({
         setBusy(true)
         setError(null)
         try {
-          const result = await callApi('gateway.configure', {
-            baseURL: endpoint.baseURL,
-            models: endpoint.models.map((m) => m.id),
-            route: 'cnb-issue',
-          })
+          // 走专用操作：gateway.configure 会先探测上游，而反代是本机地址，
+          // 探测必然失败 → 永远「未写入」。
+          const result = await callApi('issue.wireProvider', { baseURL: endpoint.baseURL })
           setError(null)
-          window.alert(result.written ? '已写入 provider cnb-issue' : (result.reason ?? '未写入'))
+          window.alert(result.note ?? (result.written ? '已写入' : '未写入'))
         } catch (writeError) {
           setError(writeError.message)
         } finally {
