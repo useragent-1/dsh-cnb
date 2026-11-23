@@ -2022,7 +2022,7 @@ window.__ModuleLoader__.load({
             'div',
             { className: 'dcnb-grid', style: { marginBottom: 10 } },
             h('label', { className: 'dcnb-muted' }, '组织（留空＝账号第一个）', h('br'),
-              h('input', { className: 'dcnb-input', value: org, onChange: (event) => setOrg(event.target.value), placeholder: '例如 catboy98', style: { width: '100%' } })),
+              h('input', { className: 'dcnb-input', value: org, onChange: (event) => setOrg(event.target.value), placeholder: '例如 your-org', style: { width: '100%' } })),
             h('label', { className: 'dcnb-muted' }, '仓库名（留空＝自动）', h('br'),
               h('input', { className: 'dcnb-input', value: name, onChange: (event) => setName(event.target.value), placeholder: 'dsh-gateway-…', style: { width: '100%' } })),
             h('label', { className: 'dcnb-muted' }, '云网关端口', h('br'),

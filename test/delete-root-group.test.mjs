@@ -51,10 +51,10 @@ function withFetch(respond) {
   })
   try {
     const api = new CnbApi({ token: async () => 'tok', api: 'https://api.cnb.cool', web: 'https://cnb.cool', session: async () => 'csrftoken=abc; other=1' })
-    const result = await api.deleteRepo('catboy98/13ff')
+    const result = await api.deleteRepo('acme/demo')
     assert.deepEqual(result, { ok: true }, 'the deletion must succeed')
     assert.equal(calls.length, 2, 'one API call, then one console call')
-    assert.equal(calls[1].url, 'https://cnb.cool/catboy98/-/repos/13ff', 'the console route, not the API one')
+    assert.equal(calls[1].url, 'https://cnb.cool/acme/-/repos/demo', 'the console route, not the API one')
     assert.equal(calls[1].method, 'DELETE')
     assert.match(calls[1].cookie, /csrftoken=abc/, 'authenticated by the session')
   } finally {
@@ -67,7 +67,7 @@ function withFetch(respond) {
   const calls = withFetch(() => json(403, { errcode: 9, errmsg: 'Cannot delete this resource via Open API due to root group management rules.' }))
   try {
     const api = new CnbApi({ token: async () => 'tok', api: 'https://api.cnb.cool', web: 'https://cnb.cool' })
-    await assert.rejects(() => api.deleteRepo('catboy98/13ff'), (error) => {
+    await assert.rejects(() => api.deleteRepo('acme/demo'), (error) => {
       assert.match(error.message, /root group/i, 'the real reason survives')
       return true
     })
@@ -97,7 +97,7 @@ function withFetch(respond) {
   })
   try {
     const api = new CnbApi({ token: async () => 'tok', api: 'https://api.cnb.cool', web: 'https://cnb.cool', session: async () => 'csrftoken=x' })
-    await assert.rejects(() => api.deleteRepo('catboy98/13ff'), (error) => {
+    await assert.rejects(() => api.deleteRepo('acme/demo'), (error) => {
       assert.match(error.message, /控制台路由也全部失败/, 'it says the console route failed too')
       assert.match(error.message, /DELETE api-json（403）/, 'and names each shape with its status')
       assert.equal(error.body.failures.length, 4, 'all four shapes are reported')
@@ -125,7 +125,7 @@ function withFetch(respond) {
   })
   try {
     const api = new CnbApi({ token: async () => 'tok', api: 'https://api.cnb.cool', web: 'https://cnb.cool', session: async () => 'csrftoken=x' })
-    const result = await api.deleteRepo('catboy98/13ff')
+    const result = await api.deleteRepo('acme/demo')
     assert.deepEqual(result, { ok: true }, 'a later shape succeeding is enough')
   } finally {
     globalThis.fetch = originalFetch
