@@ -51,6 +51,7 @@ const suites = [
   ['cloud-hot-wire', 'cloud-hot-wire.test.mjs', false],
   ['model-discovery', 'model-discovery.test.mjs', false],
   ['session-adopt', 'session-adopt.test.mjs', false],
+  ['provider-route', 'provider-route.test.mjs', false],
   ['host-smoke', 'host-smoke.mjs', true],
 ]
 
