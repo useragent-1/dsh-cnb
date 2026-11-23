@@ -2165,6 +2165,7 @@ window.__ModuleLoader__.load({
       const [note, setNote] = useState(null)
       const [snippet, setSnippet] = useState(null)
       const [pings, setPings] = useState({})
+      const [quota, setQuota] = useState(null)
 
       const load = useCallback(async (probe) => {
         setBusy(true)
@@ -2202,6 +2203,27 @@ window.__ModuleLoader__.load({
       }, [])
 
       // 一体化：生成守护配置 + 给出每个环境的处置计划。
+      // 额度自动调配：读本月开发额度，按档位决定要不要收环境。
+      // 默认 apply=false（只报告）—— 停环境有副作用，但面板上可以显式执行。
+      const autopilot = useCallback(async () => {
+        setBusy(true)
+        setError(null)
+        setNote(null)
+        try {
+          const result = await callApi('keepalive.autopilot', {})
+          if (result.plan === null) {
+            setError(result.note)
+          } else {
+            setQuota(result)
+            setNote(result.note)
+          }
+        } catch (quotaError) {
+          setError(quotaError.message)
+        } finally {
+          setBusy(false)
+        }
+      }, [])
+
       // 地址自愈：provider 指向的域名若已失效（环境被重启过），自动重新采集并改写。
       const heal = useCallback(async () => {
         setBusy(true)
@@ -2296,6 +2318,7 @@ window.__ModuleLoader__.load({
             h('button', { className: 'dcnb-btn', disabled: busy, onClick: generate }, '生成外部心跳配置'),
             h('button', { className: 'dcnb-btn', 'data-tone': 'primary', disabled: busy, onClick: automate }, busy ? '处理中…' : '一键自动化守护'),
             h('button', { className: 'dcnb-btn', disabled: busy, onClick: heal }, '地址自愈'),
+            h('button', { className: 'dcnb-btn', disabled: busy, onClick: autopilot }, '额度自动调配'),
           ),
           data === null
             ? h(Spinner, { label: '读取环境状态…' })
@@ -2355,6 +2378,21 @@ window.__ModuleLoader__.load({
                   }),
                 ),
         ),
+
+        quota === null
+          ? null
+          : h(
+              Card,
+              { title: '开发额度', extra: h('span', { className: 'dcnb-tag', 'data-tone': quota.plan.level === 'ample' ? 'ok' : quota.plan.level === 'tight' ? 'warn' : 'err' }, quota.plan.level === 'ample' ? '充足' : quota.plan.level === 'tight' ? '偏紧' : '临界') },
+              h('div', { className: 'dcnb-kv' },
+                h('dt', null, '总额度'), h('dd', null, `${(quota.quota.devTotal / 3600).toFixed(0)} 核·时`),
+                h('dt', null, '已用'), h('dd', null, `${(quota.quota.devUsed / 3600).toFixed(0)} 核·时`),
+                h('dt', null, '日均'), h('dd', null, `${(quota.quota.usedInLastDay / 3600).toFixed(1)} 核·时/天`),
+                h('dt', null, '可撑'), h('dd', null, quota.plan.daysLeft === null ? '?' : `${quota.plan.daysLeft.toFixed(1)} 天`),
+                h('dt', null, '并发上限'), h('dd', null, `${quota.plan.maxEnvironments} 台`),
+              ),
+              h('div', { className: 'dcnb-muted', style: { marginTop: 8, fontSize: 11, lineHeight: 1.7 } }, quota.plan.advice),
+            ),
 
         snippet === null
           ? null
