@@ -205,3 +205,34 @@ import { aggregateSse, attemptLadder, completionToSse } from '../lib/gateway-pro
   assert.equal(echoed.choices[0].message.content, 'OK', 'round-trip preserves the answer')
   assert.equal(echoed.choices[0].finish_reason, 'stop')
 }
+
+// --- 11. 新版 OpenAI 协议字段必须被清掉 -------------------------------
+//
+// 把 DSH 的真实请求抓下来才看清的：pi-ai 会发
+//   max_completion_tokens / store / stream_options
+// 而 CNB 网关的后端不接受它们，回报 `11133 the request parameters were rejected
+// by the model provider` —— 措辞像内容问题，实际是字段问题。这类「错误信息指向
+// 错误方向」的坑只能靠实测钉住。
+{
+  const { payload, changes } = sanitizePayload({
+    model: 'm',
+    stream: true,
+    store: false,
+    stream_options: { include_usage: true },
+    max_completion_tokens: 1024,
+    metadata: { a: 1 },
+    service_tier: 'auto',
+    messages: [{ role: 'user', content: 'hi' }],
+  })
+  assert.equal(payload.store, undefined, 'store is dropped')
+  assert.equal(payload.stream_options, undefined, 'stream_options is dropped')
+  assert.equal(payload.metadata, undefined, 'metadata is dropped')
+  assert.equal(payload.service_tier, undefined, 'service_tier is dropped')
+  // 预算要翻译而不是丢：缺了它请求会被当成无上限。
+  assert.equal(payload.max_tokens, 1024, 'max_completion_tokens becomes max_tokens')
+  assert.equal(payload.max_completion_tokens, undefined)
+  assert.ok(changes.some((c) => c.includes('max_completion_tokens')), 'the translation is reported')
+  // 已有的 max_tokens 不被覆盖。
+  const kept = sanitizePayload({ stream: true, max_tokens: 10, max_completion_tokens: 999, messages: [] })
+  assert.equal(kept.payload.max_tokens, 10, 'an explicit max_tokens wins')
+}
