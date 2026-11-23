@@ -2148,6 +2148,208 @@ window.__ModuleLoader__.load({
       return JSON.stringify(detail).slice(0, 200)
     }
 
+    /**
+     * 保活：所有运行中的云环境，各自还能活多久、什么时候会被收、怎么验证心跳真的通。
+     *
+     * 这一页刻意不做「一键保活」按钮：平台按「进入环境的连接」判定活跃，容器内
+     * 自己 ping 自己不算。所以真正有效的手段只有一个 —— 让**另一个 Runner** 定时
+     * 请求环境的端口预览域名。页面把这条讲清楚，并给出可直接用的 crontab 片段。
+     *
+     * 同时**明确说清它救不了什么**：18 小时上限与凌晨 4–6 点的「不过夜」策略按
+     * 使用时长判定，与活跃度无关。一个不说明这一点的保活界面只是在骗人。
+     */
+    function KeepaliveTab({ status }) {
+      const [data, setData] = useState(null)
+      const [busy, setBusy] = useState(false)
+      const [error, setError] = useState(null)
+      const [note, setNote] = useState(null)
+      const [snippet, setSnippet] = useState(null)
+      const [pings, setPings] = useState({})
+
+      const load = useCallback(async (probe) => {
+        setBusy(true)
+        setError(null)
+        try {
+          setData(await callApi('keepalive.status', { ...(probe === true ? { probe: true } : {}) }))
+        } catch (loadError) {
+          setError(loadError.message)
+        } finally {
+          setBusy(false)
+        }
+      }, [])
+
+      useEffect(() => { void load(false) }, [load])
+
+      // 一分钟一次刷新倒计时：数字要自己走，而不是停在打开页面那一刻。
+      useEffect(() => {
+        const timer = setInterval(() => { void load(false) }, 60_000)
+        return () => clearInterval(timer)
+      }, [load])
+
+      const probe = useCallback(async () => {
+        await load(true)
+        setNote('已对每个运行中环境真打一次端口预览域名。')
+      }, [load])
+
+      const pingOne = useCallback(async (repo, sn) => {
+        setPings((prev) => ({ ...prev, [sn]: { busy: true } }))
+        try {
+          const result = await callApi('keepalive.ping', { repo, sn })
+          setPings((prev) => ({ ...prev, [sn]: result }))
+        } catch (pingError) {
+          setPings((prev) => ({ ...prev, [sn]: { ok: false, note: pingError.message } }))
+        }
+      }, [])
+
+      const generate = useCallback(async () => {
+        setBusy(true)
+        setError(null)
+        setSnippet(null)
+        try {
+          // 默认只生成片段：改别人的 .cnb.yml 是破坏性操作，不该悄悄发生。
+          setSnippet(await callApi('keepalive.setup', {}))
+        } catch (setupError) {
+          setError(setupError.message)
+        } finally {
+          setBusy(false)
+        }
+      }, [])
+
+      if (!status?.loggedIn) return h(Banner, { tone: 'error' }, '请先在「账号」页扫码登录 CNB')
+
+      const rows = data?.rows ?? []
+      const verdictTag = (verdict) => {
+        if (verdict === 'overnight-risk') return { tone: 'err', label: '凌晨窗口内·随时被收' }
+        if (verdict === 'overnight-soon') return { tone: 'warn', label: '今晚 4 点会被收' }
+        if (verdict === 'expiring') return { tone: 'warn', label: '即将到期' }
+        if (verdict === 'running') return { tone: 'ok', label: '运行中' }
+        return { tone: undefined, label: '已停止' }
+      }
+
+      return h(
+        React.Fragment,
+        null,
+        error === null ? null : h(Banner, null, error),
+        note === null ? null : h(Banner, { tone: 'ok' }, note),
+
+        h(
+          Card,
+          {
+            title: '云环境保活',
+            extra: h('span', { className: 'dcnb-muted' }, data === null ? '' : `${data.running}/${data.total} 运行中`),
+          },
+          h(
+            'p',
+            { className: 'dcnb-muted', style: { margin: '0 0 10px', lineHeight: 1.7 } },
+            '平台规则：连续 ',
+            h('strong', null, '10 分钟'),
+            ' 无操作即回收；最长存活 ',
+            h('strong', null, '18 小时'),
+            '；另有一条「环境不过夜」—— 使用超过 8 小时且处于凌晨 4–6 点会强制回收。',
+            h('br'),
+            '保活只能守住第一条。后两条按',
+            h('strong', null, '使用时长'),
+            '判定，任何心跳都挡不住，所以这里把到期时间直接算给你看。',
+          ),
+          h(
+            'div',
+            { className: 'dcnb-row' },
+            h('button', { className: 'dcnb-btn', disabled: busy, onClick: () => void load(false) }, busy ? '刷新中…' : '刷新'),
+            h('button', { className: 'dcnb-btn', disabled: busy, onClick: probe }, '真打一次验证'),
+            h('span', { className: 'dcnb-spacer' }),
+            h('button', { className: 'dcnb-btn', disabled: busy, onClick: generate }, '生成外部心跳配置'),
+          ),
+          data === null
+            ? h(Spinner, { label: '读取环境状态…' })
+            : rows.length === 0
+              ? h('div', { className: 'dcnb-empty' }, '当前账号下没有云环境')
+              : h(
+                  'div',
+                  { className: 'dcnb-list', style: { marginTop: 12 } },
+                  rows.map((row) => {
+                    const tag = verdictTag(row.verdict)
+                    const ping = pings[row.sn]
+                    return h(
+                      'div',
+                      { key: row.sn, className: 'dcnb-item' },
+                      h(
+                        'div',
+                        { className: 'dcnb-main' },
+                        h(
+                          'div',
+                          { className: 'dcnb-title' },
+                          h('span', null, row.repo ?? '—'),
+                          h('span', { className: 'dcnb-tag', 'data-tone': tag.tone }, tag.label),
+                          row.gateway ? h('span', { className: 'dcnb-tag', 'data-tone': 'warn' }, '云网关承载') : null,
+                        ),
+                        h(
+                          'div',
+                          { className: 'dcnb-kv', style: { marginTop: 6 } },
+                          h('dt', null, '已运行'), h('dd', null, `${row.ageHours} h`),
+                          h('dt', null, '距 18h 上限'), h('dd', null, row.status === 'running' ? `${row.remainingHours} h` : '—'),
+                          h('dt', null, '预计到期'), h('dd', { className: 'dcnb-mono' }, row.expiresAt === null ? '—' : new Date(row.expiresAt).toLocaleString('zh-CN')),
+                          h('dt', null, '凌晨回收'), h('dd', null, `${row.overnight.at === null ? '—' : new Date(row.overnight.at).toLocaleString('zh-CN')} · ${row.overnight.reason}`),
+                          h('dt', null, '心跳地址'), h('dd', { className: 'dcnb-mono' }, row.previewUrl ?? '（拿不到端口预览域名）'),
+                          h('dt', null, '心跳探测'), h('dd', null,
+                            row.heartbeat.reachable === null
+                              ? h('span', { className: 'dcnb-muted' }, '未测（点「真打一次验证」）')
+                              : row.heartbeat.reachable
+                                ? h('span', { style: { color: 'var(--dsw-alias-state-success-primary)' } }, `已到达 · HTTP ${row.heartbeat.status}`)
+                                : h('span', { style: { color: 'var(--dsw-alias-state-error-primary)' } }, '连不上'),
+                          ),
+                        ),
+                        h('div', { className: 'dcnb-muted', style: { marginTop: 6, fontSize: 11, lineHeight: 1.6 } }, row.advice),
+                        ping === undefined
+                          ? null
+                          : h('div', { className: 'dcnb-mono', style: { marginTop: 6, fontSize: 11 } },
+                              ping.busy === true ? '正在发请求…' : `${ping.ok ? '已到达' : '失败'} · ${ping.status ?? ''} ${ping.note ?? ''}`),
+                      ),
+                      h(
+                        'div',
+                        { className: 'dcnb-row', style: { flexDirection: 'column', gap: 6 } },
+                        h('button', {
+                          className: 'dcnb-btn',
+                          disabled: row.status !== 'running' || (ping !== undefined && ping.busy === true),
+                          onClick: () => void pingOne(row.repo, row.sn),
+                        }, '打一次'),
+                      ),
+                    )
+                  }),
+                ),
+        ),
+
+        snippet === null
+          ? null
+          : h(
+              Card,
+              {
+                title: '外部心跳配置',
+                extra: h('button', {
+                  className: 'dcnb-btn',
+                  onClick: () => { if (navigator.clipboard?.writeText) navigator.clipboard.writeText(snippet.yml).catch(() => {}) },
+                }, '复制'),
+              },
+              h('p', { className: 'dcnb-muted', style: { margin: '0 0 8px', lineHeight: 1.7 } },
+                '把它并入仓库的 ',
+                h('code', { className: 'dcnb-mono' }, '.cnb.yml'),
+                '。这段跑在',
+                h('strong', null, '独立 Runner'),
+                '上，请求经 CNB 网关进入环境，才是平台认的心跳（容器内自己 curl 不算）。',
+                h('br'),
+                '它会覆盖 .cnb.yml 里已有的 crontab 段，合并前先确认不要冲突。',
+              ),
+              h(Banner, { tone: 'ok' }, snippet.note),
+              h('pre', {
+                className: 'dcnb-mono',
+                style: {
+                  margin: '10px 0 0', padding: 10, borderRadius: 8, overflow: 'auto', maxHeight: 320,
+                  background: 'var(--dsw-alias-bg-base)', border: '1px solid var(--dsw-alias-border-l1)',
+                },
+              }, snippet.yml),
+            ),
+      )
+    }
+
     const TABS = [
       ['account', '账号'],
       ['repos', '仓库'],
@@ -2155,6 +2357,7 @@ window.__ModuleLoader__.load({
       ['usage', '用量'],
       ['gateway', '网关模型'],
       ['cloud', '云网关'],
+      ['keepalive', '保活'],
     ]
 
     function Panel() {
@@ -2213,6 +2416,7 @@ window.__ModuleLoader__.load({
           tab === 'usage' ? h(UsageTab, { status: status.data }) : null,
           tab === 'gateway' ? h(GatewayTab, { status: status.data }) : null,
           tab === 'cloud' ? h(CloudGatewayTab, { status: status.data }) : null,
+          tab === 'keepalive' ? h(KeepaliveTab, { status: status.data }) : null,
         ),
       )
     }

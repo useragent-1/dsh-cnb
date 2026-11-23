@@ -52,6 +52,7 @@ const suites = [
   ['model-discovery', 'model-discovery.test.mjs', false],
   ['session-adopt', 'session-adopt.test.mjs', false],
   ['provider-route', 'provider-route.test.mjs', false],
+  ['keepalive', 'keepalive.test.mjs', false],
   ['host-smoke', 'host-smoke.mjs', true],
 ]
 
