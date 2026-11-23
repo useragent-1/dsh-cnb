@@ -2,8 +2,8 @@
  * 续命闭环：停掉再启动能不能继续用。
  *
  * 实测结论（2026-11-23）：
- *   停止 cnb-gq6-1k83igedc（business_id=ltl2ur5m3t）
- *   → 重启得到 cnb-2fg-1k83qhkd4（business_id=gyev27nc5p）
+ *   停止当前环境（sn=SN_A，前缀 PRE_A）
+ *   → 重启得到新环境（sn=SN_B，前缀 PRE_B）
  *   → 旧地址 302 跳 error 页，新地址 200
  *
  * 所以「杀死再启动」确实能拿到新的 18 小时。但**地址会变**，不同步配置的话
