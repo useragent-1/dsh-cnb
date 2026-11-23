@@ -28,7 +28,10 @@ const OVERLAY = 'Configuration for "llm-pi-ai" is overridden by a home patch or 
  * 一个写不动的 configEditor（模拟 --patch 接管），加一个临时 profile 目录。
  * @param {{ overlayFile?: string }} [options]
  */
+const BASE_ARGV = [...process.argv]
+
 function harness(options = {}) {
+  process.argv = [...BASE_ARGV]
   const home = mkdtempSync(join(tmpdir(), 'dsh-cnb-profile-'))
   const dir = join(home, 'profiles', 'web')
   mkdirSync(dir, { recursive: true })
@@ -71,6 +74,9 @@ function harness(options = {}) {
     on() {},
   }
   // argv 是进程级的，测试之间不还原就会串味：这里记录并复原。
+  // `process.argv` 是进程级的：一个测试往里 push 了 `--patch`，后面的测试都会被
+  // 误判成「overlay 拥有这个路由」，于是 hotPath 直接短路。这里记录原值并在
+  // 每个 harness 开头复原，保证测试之间不串味。
   if (options.overlayFile !== undefined) process.argv.push('--patch', options.overlayFile)
   return { api: apply(ctx, {}), patchFile, values }
 }
@@ -155,4 +161,45 @@ function harness(options = {}) {
   assert.equal(result.hotPath.overlayOwnsRoute, true)
   assert.equal(readFileSync(patchFile, 'utf8'), before, 'nothing was written')
   assert.ok(typeof result.snippet === 'string' && result.snippet.includes('cnb-gateway'), 'the snippet is still offered')
+}
+
+// --- 4. 写新路由时，已有的兄弟 provider 必须保留 ---------------------
+//
+// patch 层对 `config` 是**整体赋值**（`target[key] = value`），不做深度合并。
+// 所以只写 `providers: { cnb-gateway: … }` 会把同一层里原本的 `cnb` 整个抹掉。
+// 实测踩过：部署里 overlay 定义 `cnb`、profile patch 只写 `cnb-gateway`，最终
+// 组合里只剩后者，用户看到「我配的那个供应商不见了」。
+{
+  const { api, patchFile } = harness()
+  // 先写一个别的路由（模拟上一次/用户自己加的）。
+  await api.wireCloudProvider({
+    repo: 'acme/one', baseURL: 'https://one.cnb.run/v1', key: 'k1',
+    models: ['m1'], route: 'cnb-other', makeDefault: false,
+  })
+  // 再写云网关。
+  const result = await api.wireCloudProvider({
+    repo: 'acme/two', baseURL: 'https://two.cnb.run/v1', key: 'k2',
+    models: ['m1'], route: 'cnb-gateway', makeDefault: true,
+  })
+  assert.equal(result.hotPath.written, true)
+  assert.deepEqual(result.hotPath.preserved, ['cnb-other'], 'the sibling route is reported as preserved')
+
+  const parsed = yaml.parse(readFileSync(patchFile, 'utf8'))
+  const providers = parsed.find((row) => row.id === 'llm-pi-ai').config.providers
+  assert.deepEqual(Object.keys(providers).sort(), ['cnb-gateway', 'cnb-other'], 'both routes survive')
+  assert.equal(providers['cnb-other'].baseURL, 'https://one.cnb.run/v1', 'and the sibling keeps its own settings')
+  assert.equal(providers['cnb-gateway'].baseURL, 'https://two.cnb.run/v1')
+}
+
+// --- 5. 重写同一个路由不会把它自己当兄弟保留（避免重复定义）---------
+{
+  const { api, patchFile } = harness()
+  const input = { repo: 'a/b', baseURL: 'https://x/v1', key: 'k', models: ['m1'], route: 'cnb-gateway', makeDefault: false }
+  await api.wireCloudProvider(input)
+  const second = await api.wireCloudProvider({ ...input, baseURL: 'https://y/v1' })
+  assert.deepEqual(second.hotPath.preserved, [], 'the route being rewritten is not duplicated')
+  const parsed = yaml.parse(readFileSync(patchFile, 'utf8'))
+  const providers = parsed.find((row) => row.id === 'llm-pi-ai').config.providers
+  assert.deepEqual(Object.keys(providers), ['cnb-gateway'], 'exactly one route remains')
+  assert.equal(providers['cnb-gateway'].baseURL, 'https://y/v1', 'and it holds the new value')
 }
