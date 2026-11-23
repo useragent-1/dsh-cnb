@@ -115,8 +115,11 @@ function harness(options = {}) {
   assert.equal(provider.apiKeyEnv, 'DSH_CLOUD_GW_KEY')
   assert.equal(provider.models.length, 2)
   assert.equal(provider.models[0].id, 'deepseek-v4.1-flash')
-  // deepseek 家族按 256k 记：describeModel 对未知家族保守取 128k，已知家族给准值。
-  assert.equal(provider.models[0].contextWindow, 256_000)
+  // 来自 MODEL_CATALOG：deepseek-v4.1-flash 是 1M 窗口 128k 输出（本地网关那份实测画像）。
+  assert.equal(provider.models[0].contextWindow, 1_000_000)
+  assert.equal(provider.models[0].maxTokens, 128_000)
+  // 推理档位按模型自己的画像，不是统一模板。
+  assert.deepEqual(Object.keys(provider.models[0].reasoningEfforts), ['off', 'low', 'high', 'max'])
 
   const def = parsed.find((row) => row.id === 'agent-default-model')
   assert.equal(def.config.provider, 'cnb-gateway')
@@ -216,7 +219,7 @@ function harness(options = {}) {
     baseURL: 'https://x/v1',
     key: 'k',
     // 一个普通模型 + 一个推理模型（describeModel 会给 reasoning: true）
-    models: ['deepseek-v4.1-flash', 'hy4'],
+    models: ['deepseek-v4.1-flash', 'hy4std'],
     route: 'cnb-gateway',
     makeDefault: false,
   })
@@ -227,12 +230,13 @@ function harness(options = {}) {
     const unknown = Object.keys(model).filter((key) => !ALLOWED.has(key))
     assert.deepEqual(unknown, [], `${model.id} must not carry keys pi-ai silently drops`)
   }
-  // 推理能力要真的落到 reasoningEfforts 上。
-  const hy4 = models.find((model) => model.id === 'hy4')
+  // 推理档位按模型各自的画像：hy4std 只有 high，deepseek-v4.1 有 off/low/high/max。
+  const hy4 = models.find((model) => model.id === 'hy4std')
   assert.ok(hy4.reasoningEfforts !== undefined, 'a reasoning model declares its efforts')
-  assert.equal(hy4.reasoningEfforts.low, 'low')
-  assert.equal(hy4.reasoningEfforts.high, 'high')
+  assert.deepEqual(Object.keys(hy4.reasoningEfforts), ['high'], 'hy4std offers exactly one level')
   assert.equal(hy4.reasoning, undefined, 'and not a field nobody reads')
+  const ds = models.find((model) => model.id === 'deepseek-v4.1-flash')
+  assert.equal(ds.reasoningEfforts.off, null, 'off serialises as null (no thinking parameter)')
 }
 
 // --- 7. overlay 里的 provider 必须被带进 profile patch ----------------
@@ -340,4 +344,78 @@ function harness(options = {}) {
     assert.deepEqual(parsed.map((row) => row.id), ['llm-pi-ai', 'agent-default-model'], `${label}: both entries written`)
     assert.ok(parsed[0].config.providers.gw !== undefined, `${label}: the route landed`)
   }
+}
+
+// --- 10. 重跑开通必须能更新本插件自己写过的路由 -------------------
+//
+// 早先的逻辑是「overlay 已有同名路由就一律不碰」。这条对别人手写的路由成立，
+// 对本插件自己写过的不成立 —— 后果是换仓库重跑、或插件升级后模型清单变了，
+// 配置里永远留着第一次那份旧画像，用户看到「明明重新开通了，模型还是那几个」。
+//
+// 判据是 apiKeyEnv：本插件写的路由一定指向 CLOUD_KEY_REF，别人的不会。
+{
+  const overlayDir = mkdtempSync(join(tmpdir(), 'dsh-own-'))
+  const overlayFile = join(overlayDir, 'deploy.yml')
+  // overlay 里已经有一条**本插件写的**路由（apiKeyEnv 是 DSH_CLOUD_GW_KEY）
+  writeFileSync(overlayFile, [
+    '- id: llm-pi-ai',
+    '  config:',
+    '    providers:',
+    '      cnb-gateway:',
+    '        displayName: old',
+    '        api: openai-completions',
+    '        baseURL: https://old-8794.cnb.run/v1',
+    '        apiKeyEnv: DSH_CLOUD_GW_KEY',
+    '        models:',
+    '          - id: "stale-model"',
+    '            name: "stale"',
+    '            contextWindow: 1000',
+    '            maxTokens: 100',
+    '',
+  ].join('\n'))
+  const { api } = harness({ overlayFile })
+  const result = await api.wireCloudProvider({
+    repo: 'acme/new',
+    baseURL: 'https://new-8794.cnb.run/v1',
+    key: 'k',
+    models: ['deepseek-v4.1-flash'],
+    route: 'cnb-gateway',
+    makeDefault: false,
+  })
+  assert.equal(result.written, true, 'rerunning provisioning updates our own route')
+  assert.equal(result.hotPath.overlayLayer.written, true)
+  const parsed = yaml.parse(readFileSync(overlayFile, 'utf8'))
+  const provider = parsed.find((row) => row.id === 'llm-pi-ai').config.providers['cnb-gateway']
+  assert.equal(provider.baseURL, 'https://new-8794.cnb.run/v1', 'the new address wins')
+  assert.deepEqual(provider.models.map((m) => m.id), ['deepseek-v4.1-flash'], 'and the stale model list is replaced')
+}
+
+// --- 11. 别人手写的同名路由仍然不抢 -------------------------------
+{
+  const overlayDir = mkdtempSync(join(tmpdir(), 'dsh-foreign-'))
+  const overlayFile = join(overlayDir, 'deploy.yml')
+  writeFileSync(overlayFile, [
+    '- id: llm-pi-ai',
+    '  config:',
+    '    providers:',
+    '      cnb-gateway:',
+    '        displayName: someone else',
+    '        api: openai-completions',
+    '        baseURL: https://theirs/v1',
+    '        apiKeyEnv: THEIR_KEY',
+    '        models:',
+    '          - id: "their-model"',
+    '            name: "t"',
+    '            contextWindow: 1000',
+    '            maxTokens: 100',
+    '',
+  ].join('\n'))
+  const { api } = harness({ overlayFile })
+  const before = readFileSync(overlayFile, 'utf8')
+  const result = await api.wireCloudProvider({
+    repo: 'acme/new', baseURL: 'https://new/v1', key: 'k', models: ['m'], route: 'cnb-gateway', makeDefault: false,
+  })
+  assert.equal(result.written, false, 'a foreign route is left alone')
+  assert.equal(result.hotPath.overlayOwnsRoute, true)
+  assert.equal(readFileSync(overlayFile, 'utf8'), before, 'nothing was written')
 }

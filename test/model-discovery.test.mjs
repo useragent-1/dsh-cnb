@@ -108,32 +108,43 @@ function stub(table) {
   assert.deepEqual(resolveModelCatalog({ discovered: [], fallback: ['f'] }), ['f'], 'the caller can supply a fallback')
 }
 
-// --- 6. 元数据按家族给，未知家族保守取小 ---------------------------
+// --- 6. 元数据来自 MODEL_CATALOG（本地网关那份实测画像）--------
+//
+// 这些数字来自一个长期可用的部署，不是估的。推理档位**必须按模型分开**：
+// 套统一模板会给 `deepseek-v4-flash` 造出它不支持的 low/medium，
+// 又会让 `space-bunny` 的 xhigh/max 消失。
 {
-  assert.equal(describeModel('deepseek-v4.1-flash').contextWindow, 256_000)
-  assert.equal(describeModel('glm-5.3-flash').contextWindow, 128_000)
-  // 未知家族：宁可小 —— 写大了请求会在中途被上游截断，写小了只是提前压缩历史。
-  assert.equal(describeModel('mystery-model-x').contextWindow, 128_000)
-  const entry = describeModel('deepseek-v4.1-flash')
-  assert.equal(entry.id, 'deepseek-v4.1-flash')
-  assert.equal(entry.name, 'deepseek-v4.1-flash')
-  assert.ok(entry.maxTokens > 0)
+  const ds = describeModel("deepseek-v4.1-flash")
+  assert.equal(ds.contextWindow, 1_000_000)
+  assert.equal(ds.maxTokens, 128_000)
+  assert.deepEqual(ds.efforts, ["off", "low", "high", "max"], "deepseek-v4.1 has an off switch and max")
+
+  const bunny = describeModel("space-bunny")
+  assert.deepEqual(bunny.efforts, ["low", "medium", "high", "xhigh", "max"], "space-bunny reaches xhigh")
+
+  const step = describeModel("step-5-preview")
+  assert.deepEqual(step.efforts, ["low", "medium", "high"], "step has medium but no off")
+
+  // 只有一档的模型不能凭空多出档位。
+  assert.deepEqual(describeModel("deepseek-v4-flash").efforts, ["high"])
+  assert.deepEqual(describeModel("hy4std").efforts, ["high"])
+
+  // 未知模型：窗口保守、档位只留通用的一档，不编造它支持哪些强度。
+  const unknown = describeModel("mystery-model-x")
+  assert.equal(unknown.contextWindow, 128_000)
+  assert.deepEqual(unknown.efforts, ["high"])
 }
 
-// --- 6b. 推理模型要留足预算 --------------------------------------
+// --- 6b. 推理模型的输出预算 --------------------------------------
 //
 // 实测：`hy4` 在 `max_tokens: 64` 时内容被 `reasoning_content` 占满，
 // `content` 为空 —— 而 `finish_reason` 仍是 `stop`，状态上看起来完全成功。
-// 所以这类模型必须标出来，并给一个够大的预算。
 {
-  for (const id of ['hy4', 'hy4std', 'step-5-preview', 'space-bunny']) {
-    const model = describeModel(id)
-    assert.equal(model.reasoning, true, `${id} thinks before it answers`)
-    assert.ok(model.maxTokens >= 32_768, `${id} needs budget for the reasoning phase`)
+  for (const id of ["hy4", "hy4std", "step-5-preview", "space-bunny"]) {
+    assert.ok(describeModel(id).maxTokens >= 32_768, id + " needs budget for the reasoning phase")
   }
-  for (const id of ['deepseek-v4.1-flash', 'glm-5.3-flash', 'mimo-v2.6-pro']) {
-    assert.equal(describeModel(id).reasoning, false, `${id} answers directly`)
-    assert.ok(describeModel(id).maxTokens < 32_768, 'no need to reserve reasoning budget')
+  for (const id of ["deepseek-v4.1-flash", "glm-5.3-flash", "mimo-v2.6-pro"]) {
+    assert.ok(describeModel(id).efforts.length >= 1, id + " still declares its efforts")
   }
 }
 
