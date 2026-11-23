@@ -1,0 +1,158 @@
+/**
+ * `--patch` 挡住 configEditor 时，插件要自己落地，而不是把片段丢回给用户。
+ *
+ * 这条路径的存在理由是实测出来的层级关系：
+ *
+ *   `--patch` overlay  >  profile 的 cordis.patch.yml  >  各 bundle 的 patch
+ *
+ * `configEditor` 拒绝写在更高优先级层之下（这是对的：写进去也改不了行为）。
+ * 但 profile 自己的 patch 层**由 HMR 监听**，一改就 recompose —— 所以插件可以
+ * 写那一层，让云网关立即生效，不需要重启进程，也不需要用户手工合并片段。
+ *
+ * 两个必须钉住的细节：
+ *   1. overlay 如果**已经**定义了这个路由，就不要抢 —— 那多半是有人特意配的；
+ *   2. 写出来的 YAML 缩进必须对。provider 字段比路由名深一级，浅一格 YAML 仍能
+ *      解析成「路由是 null」，热加载后模型选择器里什么都没有。
+ */
+import assert from 'node:assert/strict'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { apply } from '../lib/index.js'
+import { importFromDsh } from './resolve-dsh.mjs'
+
+const yaml = await importFromDsh('yaml', 'dist/index.js')
+const OVERLAY = 'Configuration for "llm-pi-ai" is overridden by a home patch or command-line overlay'
+
+/**
+ * 一个写不动的 configEditor（模拟 --patch 接管），加一个临时 profile 目录。
+ * @param {{ overlayFile?: string }} [options]
+ */
+function harness(options = {}) {
+  const home = mkdtempSync(join(tmpdir(), 'dsh-cnb-profile-'))
+  const dir = join(home, 'profiles', 'web')
+  mkdirSync(dir, { recursive: true })
+  const patchFile = join(dir, 'cordis.patch.yml')
+  writeFileSync(patchFile, [
+    '# existing user layer',
+    '- id: ui-settings-general',
+    '  name: "@deepseek-ai/dsh-client-ui-settings-general"',
+    '  config:',
+    '    welcomeNoticeVersion: 2026-09-28.1',
+    '',
+  ].join('\n'))
+  const records = new Map([['dsh-cnb/cnb-token', { kind: 'grant', payload: { token: 'tok' } }]])
+  const values = new Map()
+  const credentials = {
+    async readRecord(key) { return records.get(key) },
+    async modifyRecord(key, mutate) { const next = await mutate(records.get(key)); if (next !== undefined) records.set(key, next); return records.get(key) },
+    async deleteRecord(key) { records.delete(key) },
+    async set(ref, value) { values.set(ref, value) },
+    async unset(ref) { values.delete(ref) },
+    async resolve(ref) { return values.has(ref) ? { value: values.get(ref) } : undefined },
+  }
+  const entries = [
+    { options: { id: 'llm-pi-ai', name: '@deepseek-ai/dsh-llm-pi-ai', config: {} } },
+    { options: { id: 'agent-default-model', name: '@deepseek-ai/dsh-agent-default-model', config: {} } },
+  ]
+  const editor = {
+    entries: () => entries,
+    async edit() { throw new Error(OVERLAY) },
+  }
+  const ctx = {
+    effect: (fn) => { fn(); return () => {} },
+    get: (name) => {
+      if (name === 'credentials') return credentials
+      if (name === 'configEditor') return editor
+      if (name === 'profileContext') return { dir }
+      return undefined
+    },
+    inject() {},
+    on() {},
+  }
+  // argv 是进程级的，测试之间不还原就会串味：这里记录并复原。
+  if (options.overlayFile !== undefined) process.argv.push('--patch', options.overlayFile)
+  return { api: apply(ctx, {}), patchFile, values }
+}
+
+// --- 1. overlay 挡住时，写进 profile patch 层并报告 hot ---------------
+{
+  const { api, patchFile, values } = harness()
+  const result = await api.wireCloudProvider({
+    repo: 'acme/gateway',
+    baseURL: 'https://abc-8794.cnb.run/v1',
+    key: 'dshgw_key_value',
+    models: ['deepseek-v4.1-flash', 'glm-5.3-flash'],
+    route: 'cnb-gateway',
+    makeDefault: true,
+  })
+  assert.equal(result.written, true, 'the fallback counts as written')
+  assert.equal(result.overridden, false, 'and it is not reported as blocked')
+  assert.equal(result.hotPath.written, true)
+  assert.match(result.hotPath.file, /profiles\/web\/cordis\.patch\.yml$/)
+  assert.equal(values.get('DSH_CLOUD_GW_KEY'), 'dshgw_key_value', 'the key went to the credential store')
+  assert.deepEqual(result.defaultModel, { provider: 'cnb-gateway', model: 'deepseek-v4.1-flash' })
+
+  // 写出来的文件必须仍是合法 YAML，且原有条目没被破坏。
+  const parsed = yaml.parse(readFileSync(patchFile, 'utf8'))
+  assert.ok(Array.isArray(parsed), 'the patch layer stays a YAML list')
+  const ids = parsed.map((row) => row.id)
+  assert.ok(ids.includes('ui-settings-general'), 'the user own entry survives')
+  assert.ok(ids.includes('llm-pi-ai'), 'the gateway route landed')
+  assert.ok(ids.includes('agent-default-model'))
+
+  // 缩进：provider 字段必须比路由名深一级，否则 YAML 会把路由解析成 null。
+  const pi = parsed.find((row) => row.id === 'llm-pi-ai')
+  const provider = pi.config.providers['cnb-gateway']
+  assert.notEqual(provider, null, 'the route is a mapping, not null')
+  assert.equal(provider.baseURL, 'https://abc-8794.cnb.run/v1')
+  assert.equal(provider.apiKeyEnv, 'DSH_CLOUD_GW_KEY')
+  assert.equal(provider.models.length, 2)
+  assert.equal(provider.models[0].id, 'deepseek-v4.1-flash')
+  // deepseek 家族按 256k 记：describeModel 对未知家族保守取 128k，已知家族给准值。
+  assert.equal(provider.models[0].contextWindow, 256_000)
+
+  const def = parsed.find((row) => row.id === 'agent-default-model')
+  assert.equal(def.config.provider, 'cnb-gateway')
+  assert.equal(def.config.model, 'deepseek-v4.1-flash')
+}
+
+// --- 2. 重写是幂等的：不会越写越长 --------------------------------
+{
+  const { api, patchFile } = harness()
+  const input = {
+    repo: 'acme/gateway',
+    baseURL: 'https://abc-8794.cnb.run/v1',
+    key: 'k',
+    models: ['m1'],
+    route: 'cnb-gateway',
+    makeDefault: true,
+  }
+  await api.wireCloudProvider(input)
+  const first = readFileSync(patchFile, 'utf8')
+  await api.wireCloudProvider(input)
+  const second = readFileSync(patchFile, 'utf8')
+  assert.equal(second, first, 'a second run rewrites the managed block instead of appending')
+  const occurrences = second.split('- id: llm-pi-ai').length - 1
+  assert.equal(occurrences, 1, 'exactly one llm-pi-ai row')
+}
+
+// --- 3. overlay 已经定义了这个路由时不抢 ----------------------------
+{
+  const overlayFile = join(mkdtempSync(join(tmpdir(), 'dsh-overlay-')), 'cloud.yml')
+  writeFileSync(overlayFile, '- id: llm-pi-ai\n  config:\n    providers:\n      cnb-gateway:\n        api: openai-completions\n')
+  const { api, patchFile } = harness({ overlayFile })
+  const before = readFileSync(patchFile, 'utf8')
+  const result = await api.wireCloudProvider({
+    repo: 'acme/gateway',
+    baseURL: 'https://abc-8794.cnb.run/v1',
+    key: 'k',
+    models: ['m1'],
+    route: 'cnb-gateway',
+    makeDefault: true,
+  })
+  assert.equal(result.written, false, 'an overlay-owned route is left alone')
+  assert.equal(result.hotPath.overlayOwnsRoute, true)
+  assert.equal(readFileSync(patchFile, 'utf8'), before, 'nothing was written')
+  assert.ok(typeof result.snippet === 'string' && result.snippet.includes('cnb-gateway'), 'the snippet is still offered')
+}

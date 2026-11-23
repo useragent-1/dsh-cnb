@@ -1,7 +1,7 @@
 {
   "name": "dsh-cnb",
-  "version": "0.1.0",
-  "description": "CNB (cnb.cool) integration for DeepSeek Harness: QR sign-in, repositories, cloud-native workspaces, organization usage, and one-click CNB AI gateway wiring into llm-pi-ai.",
+  "version": "0.2.2",
+  "description": "CNB (cnb.cool) integration for DeepSeek Harness: QR sign-in, repositories, cloud-native workspaces, organization usage, one-click CNB AI gateway wiring into llm-pi-ai, and full auto-provisioning of a cloud-hosted gateway (built-in 11128/11288 content-risk adaptation).",
   "type": "module",
   "main": "lib/index.js",
   "license": "MIT",
@@ -12,7 +12,10 @@
     "cnb",
     "cnb.cool",
     "workspace",
-    "llm-gateway"
+    "llm-gateway",
+    "cloud-gateway",
+    "auto-provision",
+    "openai-compatible"
   ],
   "exports": {
     ".": "./lib/index.js",
@@ -30,7 +33,11 @@
     "icon.svg",
     "README.md",
     "LICENSE",
-    "LICENSE-cnb2api"
+    "LICENSE-cnb2api",
+    "lib/cloud",
+    "test/*.test.mjs",
+    "test/run.mjs",
+    "test/resolve-dsh.mjs"
   ],
   "dsh": {
     "bundle": {

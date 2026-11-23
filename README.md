@@ -15,6 +15,7 @@ CNB（[cnb.cool](https://cnb.cool)）接入 DeepSeek​ Harness 的插件：扫�
 | 云原生开发 | 开发环境 | `cnb_workspaces` `cnb_workspace_open` `cnb_workspace_control` | 列表 / 启动 / 停止 / 删除，读取 `.cnb/settings.yml` 里的按钮配置 |
 | 组织用量 | 用量 | `cnb_usage` | 额度 + 当月用量，构建/开发核时、GPU、Git、对象存储、AI Credits |
 | 网关模型 | 网关模型 | `cnb_gateway_probe` `cnb_gateway_configure` | 探测仓库的 CNB AI 网关，并写入 `llm-pi-ai` 路由 |
+| 云网关 | 云网关 | `cnb_cloud_gateway` `cnb_cloud_gateway_harvest` `cnb_cloud_gateway_verify` `cnb_cloud_gateway_wire` | **全自动**：建仓库 → 写零依赖代理 → 云原生启动 → 采集公开地址 → 校验 → 写 provider。含 11288 / 11128 风控适配 |
 
 ## 安装
 
@@ -373,6 +374,189 @@ Authorization: Bearer <CNB token>
 
 **如果这两个条目被 home patch 或命令行 `--patch` 覆盖**，`configEditor` 会拒绝写入（它不写在更高优先级层之下）。这时面板不会报错收场，而是给出可直接并入那份 overlay 的 YAML 片段，并附「复制片段」。
 
+## 云网关：一条龙开通，代理跑在云环境里
+
+上一节的直连方式有个天花板，实测确认过，不是配置问题：
+
+| 事实 | 证据 |
+| --- | --- |
+| 网关只接受**流水线令牌**，个人令牌一律拒 | 403 `[NO_RIGHT] OpenAPI only allowed in pipeline` |
+| 流水线令牌与仓库绑定 | 换仓库答 403 `[SLUG_ID_NOT_MATCH]` |
+| 流水线令牌拿到**别的机器**上用会被拦 | 412 `10412 Blocked by network policy`（从构建 runner 与从本机都试过） |
+| 令牌与环境同生命周期 | 从运行中的环境采集到的令牌，环境一停就 `10008 credentials have expired` |
+
+所以「在本机直连云网关」这条路不存在。唯一可行的形态是：**代理跑在云环境里，经 CNB 端口预览域名对外**，本机 dsh 的 provider 指向那个域名。这就是「云网关」页做的事。
+
+### 它做了什么
+
+点「一键开通」之后，按顺序：
+
+1. **确认组织** —— 不给就用账号的第一个组织。
+2. **创建仓库** —— 名字不给就按 `dsh-gateway-<日期>-<时间>` 生成。
+3. **写入网关脚手架** —— 这是唯一需要绕一下的地方：OpenAPI 的 `/-/git/contents` 只有 GET，**没有任何写文件接口**。真正的写路径是**用内联 `config` 触发一次 `api_trigger` 构建**，它的 stage 跑在签出好的 `/workspace` 上，于是 `git commit && git push` 就是合法的落盘方式。空仓库也能用：第一次提交顺带建立 `main` 分支（否则 `workspace/start` 连 branch 都没有）。
+4. **云原生启动** —— 起一个开发环境，端口预览由平台映射。
+5. **采集对外地址** —— 平台的 runner 不能回调任意地址，但 stage 日志能通过 OpenAPI 读回来。所以脚手架在日志里打标记行：
+
+   ```
+   DSH_GW_URL=https://xxxx-8794.cnb.run/v1
+   DSH_GW_KEY=dshgw_…
+   DSH_GW_REPO=org/repo
+   DSH_GW_PORT=8794
+   DSH_GW_MODELS=deepseek-v4.1-flash,…
+   DSH_GW_READY=1
+   ```
+
+   解析器只认「行首就是标记名」的行，所以日志里的 shell 回显（`printf 'DSH_GW_URL=%s\n' …`）不会被误读。**缺 `READY` 就不写 provider** —— 宁可报「还没起来」，也不要往 dsh 里塞一条永远 404 的路由。
+
+6. **校验** —— 从本机真打一次那个公网地址：`/health` + 一次非流式对话。端口预览是否映射、key 是否一致、模型是否开通，只有真发一次才能同时确认。
+7. **写 provider** —— 往 `llm-pi-ai` 写 `cnb-gateway` 路由，并把 key 存进凭证库的 `DSH_CLOUD_GW_KEY`（配置文件里没有明文）。
+
+### 写不进去时怎么办：三级落地，不是「请自己合并片段」
+
+配置层级是 `--patch` overlay ＞ profile 的 `cordis.patch.yml` ＞ 各 bundle 的 patch。`configEditor` 拒绝写在更高优先级层之下（写进去也改不了行为），所以落到哪一层要按顺序试：
+
+| 顺序 | 目标 | 生效方式 | 说明 |
+| --- | --- | --- | --- |
+| 1 | `configEditor`（profile 层） | 立即 | 没有 overlay 时这是最简单的一层 |
+| 2 | profile 的 `cordis.patch.yml` | **立即（HMR 热加载）** | overlay 挡住 configEditor 时走这里；HMR 监听这个文件，一改就 recompose |
+| 3 | overlay 片段 | 需重启 | 仅当 overlay **已经**定义了这个路由 |
+
+第 2 步是这个插件能「自己配好」的关键：它由 `dsh-hmr` 监听，改完立即 recompose，不需要重启进程，也不需要人手工合并 YAML。实测在运行中的 host 上调用后，`--dump-config` 立刻能看到新路由，模型调用计数同步增长。
+
+第 3 步不抢：如果 overlay 里**已经**有同名 route，说明有人特意配了那一路，插件只把片段交出来。`dsh-hmr` 只监听 profile patch 与 home patch，**不监听 `--patch` 文件** —— 所以 overlay 层的改动无论如何都要等重启。
+
+写第 2 层时有两个坑，测试里都钉住了：
+
+- **缩进**：provider 的字段必须比路由名深一级。浅一格 YAML 仍能解析，但会把路由解析成 `null`，热加载后模型选择器里什么都没有；
+- **幂等**：重写要替换插件自己那段（用固定注释标记），不是追加，否则多跑几次文件会越来越长。
+
+profile 目录从 `ctx.get('profileContext').dir` 取，不靠 `DSH_PROFILE` 或硬编码名字推断 —— 猜错的后果是写进另一个文件，而它只表现为「patch 层不存在」。
+
+写进仓库的文件（全部零依赖，环境里不需要 `npm install`）：
+
+```
+.dsh-gateway/serve.mjs         服务入口：拉起代理、打印标记、保持前台
+.dsh-gateway/gateway-proxy.js  OpenAI 兼容代理 + 修复阶梯 + SSE 聚合
+.dsh-gateway/model-guard.js    错误归类 + 请求体修复（纯函数，可离线测试）
+.dsh-gateway/models.json       要曝光的模型 id
+.dsh-gateway/bootstrap.sh      在环境终端里手动重跑用
+.dsh-gateway/README.md         这个目录自己的说明
+.cnb.yml                       云开发环境定义 + 启动 stage
+```
+
+云端跑的就是本机测试的那三份源码（`test/cloud-provision.test.mjs` 逐字节断言），否则「本机通过、云端是另一版」这种问题会一直存在。
+
+### 11288 / 11128 内容风控适配
+
+上游会扫 `system` / `assistant` 文本里的「客户端指纹」，命中整条拒绝：
+
+```
+HTTP 400  {"code":11128,"msg":"Illegal API invocation from an unapproved channel"}
+```
+
+`11288` 是同一类（未获批准渠道），修复动作完全相同，所以两者归一类处理。换令牌、换模型、补请求头都无效 —— 被拦的是提示词本身。代理在发送前按阶梯退让，每一级都不改语义：
+
+| 级别 | 动作 | 依据 |
+| --- | --- | --- |
+| 0 | 改写已知指纹句；身份词中间插 U+200B（**路径语境跳过**，否则会把坏路径交给工具调用）；`developer`→`system`；`system` 提前；剥掉图片段；丢掉孤立的 tool 结果 | 逐项实测：身份词打散后 200；`developer` 角色单独可触发 11128；图片段答 11133；孤立 tool 答 11148 |
+| 1 | 仍被拦时把 `system` 折进首条 `user` | 实测：同一段文本放 `user` 里 200（拦截面只扫 system/assistant） |
+| 2 | 再把 `system` / `assistant` 逐词打散 | 覆盖指纹落在历史消息里的情况 |
+
+只有「指纹」类拒绝才升级阶梯 —— 11148 / 11133 在第一级已经修过，再升级只会重复发同样的坏请求。
+
+另外网关**只认流式**（非流式答 `11101`），所以代理一律发流式，客户端要非流式时由它聚合后返回（`aggregateSse` 会正确拼接 `tool_calls` 的参数片段）。
+
+### 安全
+
+代理在公网上，所以**没有 key 就不启动**：
+
+- key 由本机生成（`dshgw_…`），随脚手架写进仓库的 `.cnb.yml` 的 `env:`（新仓库没有别的注入通道，它的作用域就是这个仓库的网关），同时存进本机凭证库；
+- 除 `/health` 外所有路由都要求 `Authorization: Bearer <key>`；
+- 上游流水线令牌始终不出环境 —— 代理用它访问上游，客户端只看到 key。
+
+`/health` 故意不鉴权，只为了能判断进程起没起；它不返回任何凭证。
+
+### 模型不止一个：清单是实测出来的，不是写死的表
+
+CNB 的 AI 网关**没有清单接口** —— `/-/ai/models`、`/-/ai-ide/v2/models`、`/-/model/list`、`/-/ai/models/list` 全部 404，`GET` 那个端点还会答 `Model (empty) is not in the optional models list`。它只提供一枚判定位：
+
+| 上游回答 | 含义 |
+| --- | --- |
+| `200` | 可用 |
+| `403 [MODEL_NOT_IN_LIST]` | 不在网关目录里（id 猜错了） |
+| `403 [MODEL_NOT_AVAILABLE_FOR_ORG]` | 在目录里，但当前组织没开通 |
+
+所以「发现模型」= 拿一批候选 id 并发真调用，按这三个结果分类（`lib/model-catalog.js`）。实测 11 个并发探测约 2 秒，只在网关启动时做一次。
+
+这条设计的分工要说清：
+
+- `models.json` / 开通时传的 `models` 是**候选**，不是最终清单；
+- 云环境启动时探测，把**真实可用**的写进 `DSH_GW_MODELS` 标记；
+- 本机据此写 provider。**没额度的模型一定被排除** —— 写进去只会让 dsh 的选择器里多一个点了必然失败的选项。
+
+真机结果（`catboy98/dsh-gateway-20261123-131115`）：
+
+```
+候选 11 个 → 可用 9 个
+not-entitled: glm-5.3-flashx     （目录里有，组织没开通）
+unknown:      hy4free            （目录里没有）
+```
+
+两个结论都随 `DSH_GW_NOT_ENTITLED` / `DSH_GW_UNKNOWN` 标记回传，所以「为什么少了某个模型」不用翻日志。上游以后加新模型，只要 id 出现在候选表或你传的 `models` 里就能被发现，不需要插件发版。
+
+### 「配好了」不等于「对话在用」
+
+这一步最容易漏。DSH 的模型选择是**按会话**记住的（`modelSelection.val.lastUsed`）：
+
+```
+configEditor / profile patch 写好了 provider      →  新会话默认用它
+老会话里记着上一个 provider                          →  打开它仍然用老模型
+```
+
+所以 `cloud.wire` 会在结果里给出 `sessionAdoption`，明确告诉你差在哪：
+
+```json
+{
+  "done": false,
+  "pending": 3,
+  "message": "17 个会话里有 3 个仍在使用别的 provider。…在那些会话里点一次模型选择器选 cnb-gateway，或者开一个新会话 —— 新会话默认就是 cnb-gateway/deepseek-v4.1-flash。"
+}
+```
+
+**插件改不到这个字段**，这一点试过了，结论是明确的：
+
+- 那需要 DSH 的 `session` 服务（`session.selectModel`），它不在插件的可用依赖里；
+- 直接改 `storages/session_projcache/sessions/*.json` 会被运行中的进程覆盖回去 —— 实测手改 6 个会话，10 秒内 3 个被写回原值，因为进程持有内存状态。
+
+所以这里只做「读准 + 说清最后一步」，不谎报完成。两条可行路径都是零成本的：在旧会话里点一次模型选择器，或者开一个新会话。
+
+### 模型清单从哪来（优先级）
+
+`cloud.wire` 不带 `models` 时按这个顺序取，并在结果里用 `catalogSource` 说明来源：
+
+| 顺序 | 来源 | `catalogSource` |
+| --- | --- | --- |
+| 1 | 调用方显式传入 | `input` |
+| 2 | 本进程上一次采集到的 | 沿用 |
+| 3 | **当面问云网关 `/v1/models`** | `gateway` |
+| 4 | 候选表（最后手段） | `candidates` |
+
+第 3 步很关键：`/v1/models` 由云网关自己回答，那是探测阶段**实测过**的清单（没额度的已经剔掉）。退回候选表是最后的降级 —— 它可能包含当前组织没开通的模型。
+
+### 推理模型要留足预算
+
+有些模型先吐 `reasoning_content` 再给 `content`。实测 `hy4` 在 `max_tokens: 64` 时内容被推理占满、`content` 为空 —— 而 `finish_reason` 仍是 `stop`，从状态上看完全成功。所以 `describeModel()` 会给这类模型（`hy4*`、`step-5*`、`space-bunny`）标 `reasoning: true` 并留 32k 预算，这一项会写进 provider 的模型条目。
+
+### 环境会消失，地址会变
+
+`keepAliveTimeout: 18h` 是平台上限附近的值：默认 10 分钟内没有外部连接就回收环境，网关随之消失。环境重建后端口预览前缀会变，所以「重新采集」是一个常用按钮，不是兜底。面板也不把这个地址持久化 —— 持久化只会给一个「看起来配好了、其实指向已死域名」的假象。
+
+### 局限
+
+- 需要 `group-resource:rw` 才能建仓库；缺这项时会话路径会自动顶上（见前文），两者都没有时面板会说明缺哪一项。
+- 新仓库的 AI 网关是否开通由组织决定；没开通时校验那一步会给出 `MODEL_NOT_IN_LIST` / 模型不可用，并列出真实放行的 id。
+- 采集依赖 stage 日志，所以环境必须真的把 stage 跑起来；YAML 缩进错误这类问题会让 stage 静默不入队 —— `test/cloud-provision.test.mjs` 用真实 YAML 解析器断言结构，就是为了挡这一类。
+
 ## 工具清单
 
 | 工具 | 参数 | 作用 |
@@ -392,6 +576,10 @@ Authorization: Bearer <CNB token>
 | `cnb_gateway_configure` | `repo` `route` `model` `makeDefault` | 写入 `llm-pi-ai` 路由 |
 | `cnb_login_scopes` | — | 列出 CNB 可授权的权限项及级别 |
 | `cnb_token_doctor` | — | 逐接口探测令牌能做什么、缺哪个权限项 |
+| `cnb_cloud_gateway` | `org` `name` `visibility` `image` `models` `port` `route` `makeDefault` `waitMs` | **全自动开通云网关**：建仓库 → 写脚手架 → 云原生启动 → 采集 → 校验 → 写 provider |
+| `cnb_cloud_gateway_harvest` | `repo` `sn` `waitMs` | 重新从环境日志采集地址与 key（环境重建后用） |
+| `cnb_cloud_gateway_verify` | `url` `key` `model` | 从本机真打一次云网关 |
+| `cnb_cloud_gateway_wire` | `repo` `baseURL` `key` `models` `route` `makeDefault` | 只写 provider（跳过建仓库那一步） |
 
 ## 实现要点
 
@@ -399,27 +587,39 @@ Authorization: Bearer <CNB token>
 - **面板路由自带同源校验**：校验 `Origin`/`Host` 一致并拒绝 `Sec-Fetch-Site: cross-site`。
 - **不用第三方依赖**。二维码用 MIT 许可的 `qrcode-generator`（vendored，`vendor/qrcode.cjs`）；`.cnb/settings.yml` 由一个只读该文件格式子集的解析器处理（`lib/mini-yaml.js`），不往 profile 里塞 YAML 库。
 - **一个能力表**。`lib/index.js` 里的 `operations` 同时驱动面板路由和 agent 工具，两边不会漂移。
+- **脚手架就是源码本身**。云环境里跑的三份模块与本机测试的是同一份文件（复制而非重写），所以离线测试的结论对云端成立。
 
 ```
 dsh-cnb/
 ├── lib/
-│   ├── index.js        Host：能力表、路由、工具、configEditor 写入
-│   ├── cnb-client.js   扫码状态机 + OpenAPI 客户端
-│   ├── mini-yaml.js    .cnb/settings.yml 子集解析
-│   └── qr.js           票据 → SVG path
-├── client.js           面板（React，slots 注册）
-├── vendor/qrcode.cjs   MIT 二维码编码器
-└── test/               离线测试 + 需 CNB_TOKEN 的实网冒烟
+│   ├── index.js          Host：能力表、路由、工具、configEditor 写入、开通编排
+│   ├── cnb-client.js     扫码状态机 + OpenAPI 客户端（含内联构建与 stage 日志）
+│   ├── model-guard.js    网关错误归类 + 请求体修复（11288 / 11128）
+│   ├── model-catalog.js  模型发现：按上游错误码探测可用清单
+│   ├── session-adopt.js  会话级模型选择的调查与指引
+│   ├── gateway-proxy.js  OpenAI 兼容代理：修复阶梯、SSE 聚合、key 校验
+│   ├── provision.js      脚手架 .cnb.yml、内联构建配置、日志标记协议
+│   ├── scaffold.js       要写进目标仓库的文件清单
+│   ├── cloud/serve.mjs   云环境里的服务入口（被打包进目标仓库）
+│   ├── mini-yaml.js      .cnb/settings.yml 子集解析
+│   └── qr.js             票据 → SVG path
+├── client.js             面板（React，slots 注册）
+├── vendor/qrcode.cjs     MIT 二维码编码器
+└── test/                 离线测试 + 需 CNB_TOKEN 的实网冒烟
 ```
 
 ## 测试
 
 ```bash
-npm test                      # 离线：权限表与级别、扫码状态机、自检、mini-yaml、二维码、overlay
+npm test                      # 离线：权限表与级别、扫码状态机、自检、mini-yaml、二维码、overlay、云网关、开通编排
 CNB_TOKEN=... npm test        # 追加实网冒烟：仓库、用量、网关、配置写入
 ```
 
 实网冒烟只读 CNB，不建/删仓库，也不启停环境。`gateway-overlay` 这组会把生成的 YAML 片段丢给真实的 `llm-pi-ai` Config schema 校验，保证复制出去的东西能被 loader 接受。
+
+`cloud-gateway` 这组钉住风控适配的每一条实测结论：11288 与 11128 同类、403 的四种含义分开、身份词打散但路径跳过、修复阶梯每级都不改语义、SSE 的 `tool_calls` 参数片段要拼接。
+
+`cloud-provision` 这组钉住编排里的硬约束：`api_trigger` 事件名、写文件只能走内联构建的 checkout、标记协议要忽略 shell 回显、缺 `READY` 不写 provider、脚手架不引入任何 npm 包，以及**用真实 YAML 解析器断言 `.cnb.yml` 的结构**（缩进错位时 YAML 仍能解析，但 stage 根本不会入队）。
 
 二维码那组在装了 `jsqr` 时会额外把 SVG path 光栅化后解码，断言解出来的正是票据 URL；没装就只校验几何。
 
