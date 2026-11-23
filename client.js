@@ -2055,12 +2055,181 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /**
+     * Issue 网关：借一次性容器问模型。
+     *
+     * 与「云网关」的区别值得摆在明面上，否则用户会奇怪为什么这里这么慢：
+     *   · 云网关 —— 常驻环境，秒级响应，但一直占着一台；
+     *   · Issue 网关 —— 用一个临时容器，不占常驻资源，但要等调度（几十秒起）。
+     *
+     * 它存在的理由只有一个：额度紧的时候，这是唯一还能用上免费模型的通道。
+     */
+    function IssueGatewayTab({ status }) {
+      const [state, setState] = useState(null)
+      const [question, setQuestion] = useState('')
+      const [model, setModel] = useState('hy4')
+      const [answer, setAnswer] = useState(null)
+      const [busy, setBusy] = useState(false)
+      const [error, setError] = useState(null)
+      const [snippet, setSnippet] = useState(null)
+
+      const load = useCallback(async () => {
+        setBusy(true)
+        setError(null)
+        try {
+          setState(await callApi('issue.state', {}))
+        } catch (loadError) {
+          setError(loadError.message)
+        } finally {
+          setBusy(false)
+        }
+      }, [])
+
+      useEffect(() => { void load() }, [load])
+
+      const ask = useCallback(async () => {
+        const text = question.trim()
+        if (text === '') {
+          setError('先写一个问题')
+          return
+        }
+        setBusy(true)
+        setError(null)
+        setAnswer(null)
+        try {
+          // 这条路径要等容器调度，几十秒到几分钟，所以等待时间放宽。
+          setAnswer(await callApi('issue.ask', { question: text, model, waitMs: 300_000 }))
+        } catch (askError) {
+          setError(askError.message)
+        } finally {
+          setBusy(false)
+        }
+      }, [model, question])
+
+      const showSnippet = useCallback(async () => {
+        setBusy(true)
+        setError(null)
+        try {
+          setSnippet(await callApi('issue.configure', {}))
+        } catch (snippetError) {
+          setError(snippetError.message)
+        } finally {
+          setBusy(false)
+        }
+      }, [])
+
+      if (!status?.loggedIn) return h(Banner, { tone: 'error' }, '请先在「账号」页扫码登录 CNB')
+
+      const freeModels = state?.freeModels ?? []
+
+      return h(
+        React.Fragment,
+        null,
+        error === null ? null : h(Banner, null, error),
+
+        h(
+          Card,
+          {
+            title: 'Issue 网关',
+            extra: h('span', { className: 'dcnb-muted' }, state === null ? '' : (state.repo ?? '未选仓库')),
+          },
+          h(
+            'p',
+            { className: 'dcnb-muted', style: { margin: '0 0 10px', lineHeight: 1.7 } },
+            '不占用常驻云环境：每次提问借一个一次性容器，容器里有流水线令牌，可以直连 CNB 的 AI 网关。',
+            h('br'),
+            h('strong', null, '代价是慢'),
+            ' —— 要等容器调度，几十秒起。需要秒回就用「云网关」。',
+          ),
+          h(
+            'div',
+            { className: 'dcnb-kv' },
+            h('dt', null, '可用免费模型'),
+            h('dd', null, freeModels.length === 0
+              ? '（读取中）'
+              : freeModels.map((entry) => entry.id).join(' · ')),
+            h('dt', null, '注意'),
+            h('dd', null, 'hy4free 并不存在（上游答 model-unknown），正确的是 hy4'),
+          ),
+          h(
+            'div',
+            { className: 'dcnb-row', style: { marginTop: 12 } },
+            h('input', {
+              className: 'dcnb-input',
+              style: { flex: 1, minWidth: 200 },
+              placeholder: '问它一句话…',
+              value: question,
+              disabled: busy,
+              onChange: (event) => setQuestion(event.target.value),
+            }),
+            h('select', {
+              className: 'dcnb-input',
+              value: model,
+              disabled: busy,
+              onChange: (event) => setModel(event.target.value),
+            }, (freeModels.length === 0 ? [{ id: 'hy4', label: 'hy4' }] : freeModels).map((entry) =>
+              h('option', { key: entry.id, value: entry.id }, entry.label ?? entry.id))),
+            h('button', { className: 'dcnb-btn', 'data-tone': 'primary', disabled: busy, onClick: () => void ask() },
+              busy ? '等待容器…' : '提问'),
+          ),
+          busy
+            ? h('div', { className: 'dcnb-muted', style: { marginTop: 10, fontSize: 12 } },
+                '正在等一次性容器启动并调用模型。这条路径本身就是几十秒级，不是卡住了。')
+            : null,
+          answer === null
+            ? null
+            : h(
+                'div',
+                { style: { marginTop: 12 } },
+                answer.ok
+                  ? h(React.Fragment, null,
+                      h('div', { className: 'dcnb-muted', style: { fontSize: 11, marginBottom: 6 } },
+                        `模型 ${answer.model} · 构建 ${answer.build}`),
+                      h('pre', {
+                        className: 'dcnb-mono',
+                        style: {
+                          margin: 0, padding: 10, borderRadius: 8, whiteSpace: 'pre-wrap',
+                          background: 'var(--dsw-alias-bg-base)', border: '1px solid var(--dsw-alias-border-l1)',
+                        },
+                      }, answer.answer))
+                  : h(Banner, { tone: 'error' }, answer.reason ?? '没有拿到答案'),
+              ),
+        ),
+
+        h(
+          Card,
+          { title: '触发配置', extra: h('button', { className: 'dcnb-btn', disabled: busy, onClick: () => void showSnippet() }, '查看片段') },
+          h('p', { className: 'dcnb-muted', style: { margin: 0, lineHeight: 1.7 } },
+            '当前「提问」按钮走的是 ',
+            h('code', { className: 'dcnb-mono' }, 'api_trigger'),
+            '，不需要仓库额外配置。',
+            h('br'),
+            '下面这份是 ',
+            h('code', { className: 'dcnb-mono' }, 'issue.open'),
+            ' 版本 —— 想用「在仓库里开 Issue 就自动回答」时才需要，且必须在仓库页面',
+            h('strong', null, ' 设置 → 云原生构建 '),
+            '勾选「允许自动触发」，否则 Issue 开了也不会跑（平台限制，API 改不了）。'),
+          snippet === null
+            ? null
+            : h('pre', {
+                className: 'dcnb-mono',
+                style: {
+                  margin: '10px 0 0', padding: 10, borderRadius: 8, overflow: 'auto', maxHeight: 280,
+                  background: 'var(--dsw-alias-bg-base)', border: '1px solid var(--dsw-alias-border-l1)',
+                },
+              }, snippet.yml),
+        ),
+      )
+    }
+
+
     const TABS = [
       ['account', '账号'],
       ['repos', '仓库'],
       ['envs', '开发环境'],
       ['usage', '用量'],
       ['cloud', '云网关'],
+      ['issue', 'Issue 网关'],
       ['keepalive', '保活'],
     ]
 
@@ -2119,6 +2288,7 @@ window.__ModuleLoader__.load({
           tab === 'envs' ? h(EnvironmentsTab, { status: status.data }) : null,
           tab === 'usage' ? h(UsageTab, { status: status.data }) : null,
           tab === 'cloud' ? h(CloudGatewayTab, { status: status.data }) : null,
+          tab === 'issue' ? h(IssueGatewayTab, { status: status.data }) : null,
           tab === 'keepalive' ? h(KeepaliveTab, { status: status.data }) : null,
         ),
       )
