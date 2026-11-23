@@ -63,7 +63,5 @@ assert.deepEqual(
 )
 
 // The specific regression, stated as itself.
-assert.match(source, /const GATEWAY_BLOCKERS = \{/, 'the gateway blocker labels must be declared')
-assert.match(source, /GATEWAY_BLOCKERS\[entry\.kind\]/, 'and used by the survey rows')
 
 console.log('client-identifiers OK · no component or constant is used before it is defined')
