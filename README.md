@@ -504,6 +504,39 @@ unknown:      hy4free            （目录里没有）
 
 两个结论都随 `DSH_GW_NOT_ENTITLED` / `DSH_GW_UNKNOWN` 标记回传，所以「为什么少了某个模型」不用翻日志。上游以后加新模型，只要 id 出现在候选表或你传的 `models` 里就能被发现，不需要插件发版。
 
+### 装了插件后「原来的供应商不见了」：overlay 是整体覆盖
+
+如果你的部署用启动脚本生成一个 `--patch` 文件（很多自建栈都这么做），会遇到三个连着的现象：
+
+1. 界面上的「添加供应商 / 导入」被拒：
+   `Configuration for "llm-pi-ai" is overridden by a home patch or command-line overlay`
+2. 插件写进 `llm-pi-ai` 的 provider 不生效；
+3. **反而是原来能用的那个 provider 消失了。**
+
+根因是 patch 层的合并方式：
+
+```js
+// dsh-app-boot applyPatches
+target[key] = value        // config 整体赋值，不深度合并
+```
+
+所以一旦某一层定义了 `llm-pi-ai.providers`，它就把整棵 providers 树按住 —— 上层看到的是这一份，不是几个来源的并集。插件早先只写自己那一个路由，于是把 overlay 里原有的 provider 一起替换掉了。
+
+**现在插件的处理**（`wireCloudProvider`）：
+
+- 读回 `--patch` overlay 里已有的 provider 画像，连同自己新加的路由**一起**写进 profile patch，做到「加一个」而不是「换一批」；
+- overlay 里已经定义同名路由时不抢（那多半是有人特意配的）；
+- 已被 profile patch 自己定义过的名字不重复写。
+
+**你的部署该怎么做**（二选一）：
+
+| 目标 | 做法 |
+| --- | --- |
+| 保留脚本接管 `cnb`，同时要别的 provider | 在启动脚本里把额外 provider 并进那份 overlay（`extraProviders`），别手写死一个 |
+| 想让界面自由编辑模型 | 别传 `--patch`，或让脚本只在 `cnb` 缺失时写一次 |
+
+判断标准很简单：`dsh --dump-config | grep -A20 'llm-pi-ai'` 看到的 `providers` 下面有几个键。只有一个、且不是你配的那个，就是被 overlay 按住了。
+
 ### 「配好了」不等于「对话在用」
 
 这一步最容易漏。DSH 的模型选择是**按会话**记住的（`modelSelection.val.lastUsed`）：

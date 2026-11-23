@@ -234,3 +234,64 @@ function harness(options = {}) {
   assert.equal(hy4.reasoningEfforts.high, 'high')
   assert.equal(hy4.reasoning, undefined, 'and not a field nobody reads')
 }
+
+// --- 7. overlay 里的 provider 必须被带进 profile patch ----------------
+//
+// patch 层对 `config` 是整体赋值：profile patch 一旦定义 `llm-pi-ai.providers`，
+// overlay 那棵树就被替换。所以只写自己那一个路由，会让「装了插件以后我原来的
+// 供应商不见了」。这里把 overlay 的 provider 一起写过去，保证是「加一个」。
+//
+// 这条是给**所有**下载本插件的人兜底的：他们的部署里大概率已经有一个
+// 由自己的启动脚本生成的 `--patch`，其中定义着他们原来能用的 provider。
+{
+  const overlayDir = mkdtempSync(join(tmpdir(), 'dsh-overlay7-'))
+  const overlayFile = join(overlayDir, 'deploy-model.yml')
+  writeFileSync(overlayFile, [
+    '- id: agent-default-model',
+    '  config:',
+    '    provider: local',
+    '    model: "m"',
+    '- id: llm-pi-ai',
+    '  config:',
+    '    providers:',
+    '      local:',
+    '        displayName: Local Proxy',
+    '        api: openai-completions',
+    '        baseURL: http://127.0.0.1:9999/v1',
+    '        apiKeyEnv: LOCAL_KEY',
+    '        compat:',
+    '          thinkingFormat: openai',
+    '          supportsReasoningEffort: true',
+    '          maxTokensField: max_tokens',
+    '        models:',
+    '          - id: "m"',
+    '            name: "M"',
+    '            contextWindow: 1000000',
+    '            maxTokens: 128000',
+    '            reasoningEfforts:',
+    '              low: low',
+    '              high: high',
+    '',
+  ].join('\n'))
+  const { api, patchFile } = harness({ overlayFile })
+  const result = await api.wireCloudProvider({
+    repo: 'acme/gw',
+    baseURL: 'https://gw.cnb.run/v1',
+    key: 'k',
+    models: ['deepseek-v4.1-flash'],
+    route: 'cnb-gateway',
+    makeDefault: false,
+  })
+  assert.equal(result.written, true)
+  assert.ok(result.hotPath.preserved.includes('local'), 'the deployment provider is reported as preserved')
+
+  const parsed = yaml.parse(readFileSync(patchFile, 'utf8'))
+  const providers = parsed.find((row) => row.id === 'llm-pi-ai').config.providers
+  assert.ok(providers.local !== undefined, 'the deployment own provider survives')
+  assert.equal(providers.local.baseURL, 'http://127.0.0.1:9999/v1')
+  assert.equal(providers.local.apiKeyEnv, 'LOCAL_KEY')
+  assert.equal(providers.local.models[0].id, 'm', 'including its model list')
+  assert.equal(providers.local.models[0].contextWindow, 1000000, 'and its per-model metadata')
+  assert.ok(providers.local.models[0].reasoningEfforts !== undefined, 'and its reasoning efforts')
+  assert.ok(providers['cnb-gateway'] !== undefined, 'and the new route is added besides it')
+}
