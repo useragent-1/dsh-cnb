@@ -36,14 +36,14 @@ function harness(options = {}) {
   const dir = join(home, 'profiles', 'web')
   mkdirSync(dir, { recursive: true })
   const patchFile = join(dir, 'cordis.patch.yml')
-  writeFileSync(patchFile, [
+  writeFileSync(patchFile, options.initial === undefined ? [
     '# existing user layer',
     '- id: ui-settings-general',
     '  name: "@deepseek-ai/dsh-client-ui-settings-general"',
     '  config:',
     '    welcomeNoticeVersion: 2026-09-28.1',
     '',
-  ].join('\n'))
+  ].join('\n') : options.initial)
   const records = new Map([['dsh-cnb/cnb-token', { kind: 'grant', payload: { token: 'tok' } }]])
   const values = new Map()
   const credentials = {
@@ -294,4 +294,50 @@ function harness(options = {}) {
   assert.equal(providers.local.models[0].contextWindow, 1000000, 'and its per-model metadata')
   assert.ok(providers.local.models[0].reasoningEfforts !== undefined, 'and its reasoning efforts')
   assert.ok(providers['cnb-gateway'] !== undefined, 'and the new route is added besides it')
+}
+
+// --- 8. 重复写入不能留下两条 llm-pi-ai -------------------------------
+//
+// 同一个 profile patch 里可能出现两条 `llm-pi-ai`：一条是 configEditor 正常
+// 写入的（没有 overlay 时就走那里），一条是本插件为绕过 overlay 追加的。
+// 只裁掉后一条会留下前一条，两份 providers 里各有一个同名路由 —— 实测表现是
+// 「新加的路由不见了」，而且 `--dump-config` 里只剩旧的那份，极难查。
+{
+  const { api, patchFile } = harness()
+  const first = { repo: 'a/b', baseURL: 'https://one/v1', key: 'k', models: ['m'], route: 'cnb-gateway', makeDefault: true }
+  await api.wireCloudProvider(first)
+  // 第二次写同一个路由（不同地址）：必须替换，不能叠加。
+  await api.wireCloudProvider({ ...first, baseURL: 'https://two/v1' })
+  const text = readFileSync(patchFile, 'utf8')
+  assert.equal((text.match(/- id: llm-pi-ai/g) ?? []).length, 1, 'exactly one llm-pi-ai entry')
+  assert.equal((text.match(/- id: agent-default-model/g) ?? []).length, 1, 'exactly one default-model entry')
+  const parsed = yaml.parse(text)
+  assert.equal(parsed.find((row) => row.id === 'llm-pi-ai').config.providers['cnb-gateway'].baseURL, 'https://two/v1')
+}
+
+// --- 9. 空的 profile patch（`[]`）必须能写进去 ---------------------
+//
+// 全新安装的 profile，`cordis.patch.yml` 的内容是一个空 YAML 文档 `[]`。
+// 它不是「没有内容」而是「值为空列表的文档」，直接往后追加 `- id: …` 会得到
+// `[]` 换行 `- id: llm-pi-ai` —— YAML 只有一个文档槽，这就是语法错误：
+//   failed to parse overlay … end of the stream or a document separator is expected
+// 全新用户第一次点「写入 provider」就撞上它，配置整个加载不了。
+{
+  const cases = [
+    ['empty array', '# header\n[]\n'],
+    ['empty file', ''],
+    ['comments only', '# nothing but this\n'],
+  ]
+  for (const [label, initial] of cases) {
+    const { api, patchFile } = harness({ initial })
+    await api.wireCloudProvider({
+      repo: 'a/b', baseURL: 'https://x/v1', key: 'k', models: ['m'], route: 'gw', makeDefault: true,
+    })
+    const text = readFileSync(patchFile, 'utf8')
+    let parsed
+    assert.doesNotThrow(() => { parsed = yaml.parse(text) }, `${label}: the file must stay parseable`)
+    assert.ok(Array.isArray(parsed), `${label}: still a patch list`)
+    assert.deepEqual(parsed.map((row) => row.id), ['llm-pi-ai', 'agent-default-model'], `${label}: both entries written`)
+    assert.ok(parsed[0].config.providers.gw !== undefined, `${label}: the route landed`)
+  }
 }
