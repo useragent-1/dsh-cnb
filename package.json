@@ -1,6 +1,6 @@
 {
   "name": "dsh-cnb",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "CNB (cnb.cool) integration for DeepSeek Harness: QR sign-in, repositories, cloud-native workspaces, organization usage, one-click CNB AI gateway wiring into llm-pi-ai, and full auto-provisioning of a cloud-hosted gateway (built-in 11128/11288 content-risk adaptation).",
   "type": "module",
   "main": "lib/index.js",
