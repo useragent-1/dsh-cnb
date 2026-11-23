@@ -1385,7 +1385,9 @@ window.__ModuleLoader__.load({
                             {
                               className: 'dcnb-btn',
                               onClick: () => {
-                                setSelected(environment.sn ?? '')
+                                // 这里原本还有一句 set-selected 的调用，但本组件没有
+                                // 对应的 useState —— 点一下就 ReferenceError、面板黑屏。
+                                // act() 已经负责呈现结果，这行本来就是多余的。
                                 act(
                                   () => callApi('workspaces.detail', { repo: repo.trim(), sn: environment.sn }),
                                   '读取环境地址',
@@ -2073,6 +2075,10 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = useState(false)
       const [error, setError] = useState(null)
       const [snippet, setSnippet] = useState(null)
+      // 反代地址与模型清单。上一版漏了这个声明 —— 组件里直接用了 setEndpoint，
+      // 运行时抛 ReferenceError，整个面板黑屏（与 GATEWAY_BLOCKERS 那次同源：
+      // 引用了不存在的绑定）。
+      const [endpoint, setEndpoint] = useState(null)
 
       const load = useCallback(async () => {
         setBusy(true)

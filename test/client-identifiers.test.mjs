@@ -65,3 +65,33 @@ assert.deepEqual(
 // The specific regression, stated as itself.
 
 console.log('client-identifiers OK · no component or constant is used before it is defined')
+
+// --- state setter 也必须声明 -------------------------------------
+//
+// 上面那轮只查大写常量与 `h(Component)`，所以漏掉过一次真实事故：
+// `Issue 网关` 那页直接用了 `setEndpoint`，而对应的 `useState` 写在**另一个
+// 组件**里 —— 文件能解析、检查也通过，但一进那个页签就 ReferenceError，
+// 整个面板黑屏。
+//
+// 这里把 `setXxx` 也纳入检查：每个都必须在同一文件里有 `const [xxx, setXxx]`。
+{
+  const setters = new Set([...source.matchAll(/\b(set[A-Z][A-Za-z0-9_]*)\s*\(/g)].map((m) => m[1]))
+  const declaredSetters = new Set(
+    [...source.matchAll(/const\s*\[\s*[A-Za-z_$][\w$]*\s*,\s*(set[A-Z][A-Za-z0-9_]*)\s*\]/g)].map((m) => m[1]),
+  )
+  /**
+   * 排除同名但不是 state setter 的全局/内置方法：
+   *   setTimeout / setInterval —— 全局定时器
+   *   setItem                 —— localStorage 的方法
+   * 它们长得像 setter，但没有对应的 useState。
+   */
+  const NOT_SETTERS = new Set(['setTimeout', 'setInterval', 'setItem', 'setImmediate'])
+  const missingSetters = [...setters].filter((name) => !declaredSetters.has(name) && !NOT_SETTERS.has(name))
+  assert.deepEqual(
+    missingSetters,
+    [],
+    `these state setters are called but never declared via useState: ${missingSetters.join(', ')}`,
+  )
+}
+
+console.log('client-identifiers OK · every state setter is declared by a useState')
