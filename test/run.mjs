@@ -51,6 +51,7 @@ const suites = [
   ['gateway-token', 'gateway-token.test.mjs', false],
   ['neutralize', 'neutralize.test.mjs', false],
   ['image-guard', 'image-guard.test.mjs', false],
+  ['scaffold-imports', 'scaffold-imports.test.mjs', false],
   ['provider-input', 'provider-input.test.mjs', false],
   ['onboarding', 'onboarding.test.mjs', false],
   ['ambient-token', 'ambient-token.test.mjs', false],

@@ -277,6 +277,7 @@ import { importFromDsh } from './resolve-dsh.mjs'
     `${SCAFFOLD_DIR}/README.md`,
     `${SCAFFOLD_DIR}/bootstrap.sh`,
     `${SCAFFOLD_DIR}/gateway-proxy.js`,
+    `${SCAFFOLD_DIR}/image-guard.js`,
     `${SCAFFOLD_DIR}/model-catalog.js`,
     `${SCAFFOLD_DIR}/model-guard.js`,
     `${SCAFFOLD_DIR}/models.json`,
