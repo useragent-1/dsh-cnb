@@ -58,6 +58,37 @@ import { issueBaseFor } from '../lib/index.js'
   assert.equal(blank, 'http://127.0.0.1:3080/dsh-cnb/issue/v1')
 }
 
+// --- 4b. 容器主机名不是地址，不能拿来当 host ---------------------------
+//
+// 实测（流水线容器）：`CNB_VSCODE_PROXY_URI` 为空，`hostname` 是 `2bb575c42639`
+// 这种容器 ID。把它写进 provider 只会得到一个从别处解析不了的地址 —— 比回环更
+// 糟，因为回环至少语义诚实（本机跑、本机用），而容器主机名看起来像个有效主机。
+{
+  const url = issueBaseFor({ HOSTNAME: '2bb575c42639' })
+  assert.ok(!url.includes('2bb575c42639'), 'a container hostname must never become the provider host')
+  assert.equal(url, 'http://127.0.0.1:3080/dsh-cnb/issue/v1')
+  // 真给了可路由地址才用它。
+  assert.equal(
+    issueBaseFor({ HOSTNAME: '2bb575c42639', CNB_WORKSPACE_HOST: '172.17.0.24' }),
+    'http://172.17.0.24:3080/dsh-cnb/issue/v1',
+  )
+}
+
+// --- 4c. 真实的两种环境各算各的 ---------------------------------------
+//
+// 这两个值是从真环境里读出来的，不是编的：
+//   · 云原生开发环境（dsh 主进程所在）：CNB_VSCODE_PROXY_URI 带 {{port}} 模板
+//   · 流水线容器：该变量为空
+// 后者根本不会跑本插件（webServer 只在 dsh 主进程里注册），所以前者是常态。
+{
+  const devEnv = issueBaseFor({ CNB_VSCODE_PROXY_URI: 'https://76j9sspyrr-{{port}}.cnb.run' })
+  assert.equal(devEnv, 'https://76j9sspyrr-3080.cnb.run/dsh-cnb/issue/v1')
+
+  const anotherDev = issueBaseFor({ CNB_VSCODE_PROXY_URI: 'https://l4v7a0n4ls-{{port}}.cnb.run' })
+  assert.equal(anotherDev, 'https://l4v7a0n4ls-3080.cnb.run/dsh-cnb/issue/v1')
+  assert.notEqual(anotherDev, devEnv, 'each environment derives its own domain')
+}
+
 // --- 5. 路径固定，且总是指向本插件的反代 ------------------------------
 {
   for (const env of [
