@@ -58,6 +58,7 @@ const suites = [
   ['usage-live', 'usage-live.test.mjs', false],
   ['provider-wiring', 'provider-wiring.test.mjs', false],
   ['model-catalog', 'model-catalog.test.mjs', false],
+  ['model-coverage', 'model-coverage.test.mjs', false],
   ['cloud-gateway', 'cloud-gateway.test.mjs', false],
   ['cloud-provision', 'cloud-provision.test.mjs', false],
   ['cloud-hot-wire', 'cloud-hot-wire.test.mjs', false],
