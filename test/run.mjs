@@ -50,6 +50,8 @@ const suites = [
   ['client-identifiers', 'client-identifiers.test.mjs', false],
   ['gateway-token', 'gateway-token.test.mjs', false],
   ['neutralize', 'neutralize.test.mjs', false],
+  ['image-guard', 'image-guard.test.mjs', false],
+  ['provider-input', 'provider-input.test.mjs', false],
   ['onboarding', 'onboarding.test.mjs', false],
   ['ambient-token', 'ambient-token.test.mjs', false],
   ['usage-live', 'usage-live.test.mjs', false],

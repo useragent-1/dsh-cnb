@@ -95,11 +95,41 @@ import { aggregateSse, attemptLadder, completionToSse } from '../lib/gateway-pro
   assert.ok(changes.includes('developer→system'))
   assert.equal(payload.model, 'deepseek-v4.1-flash', 'protocol fields are untouched')
 
+  /**
+   * 图片段必须**保留并归一**，不能丢。
+   *
+   * 旧理由「网关不接受图片段（11133）」只对了一半：上游不接受的是**非规范
+   * 形状**，规范形状（image_url + base64 data URL）实测 200 且真能识图。
+   * 丢图会让模型对着空气描述，比报错更难查。
+   */
   const withImage = sanitizePayload({
-    messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }, { type: 'image_url', image_url: { url: 'data:,' } }] }],
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'text', text: 'hi' },
+        { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } },
+      ],
+    }],
   })
-  assert.ok(withImage.changes.includes('drop:image-part'), 'the gateway rejects image parts (11133)')
-  assert.deepEqual(withImage.payload.messages[0].content.map((part) => part.type), ['text'])
+  assert.ok(
+    withImage.changes.some((c) => c.startsWith('image→image_url')),
+    'the image survives as a canonical image_url part',
+  )
+  assert.deepEqual(withImage.payload.messages[0].content.map((part) => part.type), ['text', 'image_url'])
+  assert.equal(
+    withImage.payload.messages[0].content[1].image_url.url,
+    'data:image/png;base64,AAAA',
+    'the base64 source is rewritten into a data URL, which is the only form upstream reads',
+  )
+  // 认不出地址的图片段仍然要丢：留着必被上游 11101 拒。
+  const unusable = sanitizePayload({
+    messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }, { type: 'image_url', image_url: {} }] }],
+  })
+  assert.ok(
+    unusable.changes.some((c) => c.startsWith('drop:unusable-image')),
+    'a part with no usable url is dropped rather than sent',
+  )
+  assert.deepEqual(unusable.payload.messages[0].content.map((part) => part.type), ['text'])
 }
 
 // --- 6. 孤立的 tool 结果被丢掉（网关答 11148）-------------------------

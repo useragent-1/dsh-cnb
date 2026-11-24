@@ -486,11 +486,27 @@ HTTP 400  {"code":11128,"msg":"Illegal API invocation from an unapproved channel
 
 | 级别 | 动作 | 依据 |
 | --- | --- | --- |
-| 0 | 改写已知指纹句；身份词中间插 U+200B（**路径语境跳过**，否则会把坏路径交给工具调用）；`developer`→`system`；`system` 提前；剥掉图片段；丢掉孤立的 tool 结果 | 逐项实测：身份词打散后 200；`developer` 角色单独可触发 11128；图片段答 11133；孤立 tool 答 11148 |
+| 0 | 改写已知指纹句；身份词中间插 U+200B（**路径语境跳过**，否则会把坏路径交给工具调用）；`developer`→`system`；`system` 提前；图片段归一到上游认的形状；丢掉孤立的 tool 结果 | 逐项实测：身份词打散后 200；`developer` 角色单独可触发 11128；图片段**换形状**后 200（见下）；孤立 tool 答 11148 |
 | 1 | 仍被拦时把 `system` 折进首条 `user` | 实测：同一段文本放 `user` 里 200（拦截面只扫 system/assistant） |
 | 2 | 再把 `system` / `assistant` 逐词打散 | 覆盖指纹落在历史消息里的情况 |
 
 只有「指纹」类拒绝才升级阶梯 —— 11148 / 11133 在第一级已经修过，再升级只会重复发同样的坏请求。
+
+### 图片
+
+上游**能识图**，只认一种形状：`{type:'image_url', image_url:{url:'data:image/png;base64,…'}}`。所以图片段是「换形状」，不是「丢掉」：
+
+| 客户端形状 | 处理 |
+| --- | --- |
+| `{type:'image_url', image_url:{url}}` | 保留 |
+| `{type:'image_url', image_url:'data:…'}` | 包成对象 |
+| `{type:'input_image', image_url}` | 转换 |
+| `{type:'image', source:{type:'base64', …}}` | 转成 data URL |
+| `{type:'image', source:{type:'url', url}}` / 裸 `http(s)` | 下载后内联（上游不替客户端下载） |
+
+早期版本直接删掉图片段（`drop:image-part`）—— 请求能通，但模型根本没看到图，只会对着空气描述。而实测上游是能识图的：三圆图能数出个数、说出横排、认出颜色。所以丢图是错的。取不回的远程图会降级成一句文字说明，而不是静默消失；超限的图原样透传，让上游给出明确报错。
+
+provider 画像里必须写 `input: ['text','image']`，**不是** `input_modalities` —— schemastery 对未知键原样保留，写错了配置看起来完全正常，但模型解析出的 `input` 仍是 `[]`，pi-ai 在发请求前就抛 `does not support image input`，请求根本到不了网关。
 
 另外网关**只认流式**（非流式答 `11101`），所以代理一律发流式，客户端要非流式时由它聚合后返回（`aggregateSse` 会正确拼接 `tool_calls` 的参数片段）。
 
@@ -746,6 +762,7 @@ dsh-cnb/
 │   ├── index.js          Host：能力表、路由、工具、configEditor 写入、开通编排
 │   ├── cnb-client.js     扫码状态机 + OpenAPI 客户端（含内联构建与 stage 日志）
 │   ├── model-guard.js    网关错误归类 + 请求体修复（11288 / 11128）
+│   ├── image-guard.js    图片段归一：多形状 → upstream 认的 data URL
 │   ├── model-catalog.js  模型发现：按上游错误码探测可用清单
 │   ├── session-adopt.js  会话级模型选择的调查与指引
 │   ├── gateway-proxy.js  OpenAI 兼容代理：修复阶梯、SSE 聚合、key 校验
@@ -769,6 +786,8 @@ CNB_TOKEN=... npm test        # 追加实网冒烟：仓库、用量、网关、
 实网冒烟只读 CNB，不建/删仓库，也不启停环境。`gateway-overlay` 这组会把生成的 YAML 片段丢给真实的 `llm-pi-ai` Config schema 校验，保证复制出去的东西能被 loader 接受。
 
 `cloud-gateway` 这组钉住风控适配的每一条实测结论：11288 与 11128 同类、403 的四种含义分开、身份词打散但路径跳过、修复阶梯每级都不改语义、SSE 的 `tool_calls` 参数片段要拼接。
+
+`image-guard` 这组钉住图片链路：四种客户端形状都能取出地址、只有 `image/*` 的 data URL 才算内联、Anthropic/Responses 形状归一、认不出地址的段要丢、超限图原样透传、远程图下载后内联且**取不回时要降级成一句说明而不是消失**。`provider-input` 单独钉住 `input` 与 `input_modalities` 的区别 —— 后者静默失效，用错了整条图片链路在发请求前就断。
 
 `cloud-provision` 这组钉住编排里的硬约束：`api_trigger` 事件名、写文件只能走内联构建的 checkout、标记协议要忽略 shell 回显、缺 `READY` 不写 provider、脚手架不引入任何 npm 包，以及**用真实 YAML 解析器断言 `.cnb.yml` 的结构**（缩进错位时 YAML 仍能解析，但 stage 根本不会入队）。
 
