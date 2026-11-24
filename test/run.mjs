@@ -27,6 +27,8 @@ const suites = [
   ['client-links', 'client-links.test.mjs', false],
   ['login-days', 'login-days.test.mjs', false],
   ['logout', 'logout.test.mjs', false],
+  ['accounts', 'accounts.test.mjs', false],
+  ['account-panel', 'account-panel.test.mjs', false],
   ['login-panel', 'login-panel.test.mjs', false],
   ['session-only', 'session-only.test.mjs', false],
   ['token-name', 'token-name.test.mjs', false],

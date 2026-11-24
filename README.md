@@ -11,6 +11,7 @@ CNB（[cnb.cool](https://cnb.cool)）接入 DeepSeek​ Harness 的插件：扫�
 | 模块 | 面板 | 工具 | 说明 |
 | --- | --- | --- | --- |
 | 扫码登录 | 账号 | `cnb_status` `cnb_login_begin` `cnb_login_poll` | 微信扫码 → 自动创建访问令牌 → 存进 dsh 凭证库 |
+| 多账户 | 账号 | `cnb_accounts` `cnb_account_switch` `cnb_account_rename` `cnb_account_remove` | 存多个 CNB 账号、一键切换、改名、删除；切换不重新扫码，过期令牌用该账户自己的会话自动重签 |
 | 仓库 | 仓库 | `cnb_repos` `cnb_repo_status` `cnb_repo_create` `cnb_repo_delete` | 列表 / 详情 / 新建 / 删除（删除需 `confirm: true`） |
 | 云原生开发 | 开发环境 | `cnb_workspaces` `cnb_workspace_open` `cnb_workspace_control` | 列表 / 启动 / 停止 / 删除，读取 `.cnb/settings.yml` 里的按钮配置 |
 | 组织用量 | 用量 | `cnb_usage` | 额度 + 当月用量，构建/开发核时、GPU、Git、对象存储、AI Credits |
@@ -32,7 +33,7 @@ dsh plugin --profile <profile> add /绝对路径/dsh-cnb
 
 `dsh plugin` 转发给 pnpm，所以本地目录要用**绝对路径**。
 
-装完在 dsh 的 Web 界面侧边栏会出现 **CNB** 入口，同时注册 15 个 `cnb_*` 工具给 agent。
+装完在 dsh 的 Web 界面侧边栏会出现 **CNB** 入口，同时注册 27 个 `cnb_*` 工具给 agent。
 
 配置项只有一个可选的覆盖点，写在 `cordis.patch.yml` 里：
 
@@ -154,6 +155,32 @@ CNB 的创建接口对一份"授予不了任何权限"的 scope 也返回成功�
 - 会话本身失效（回答 401）时才会提示重新扫码——这时也确实只有扫码能解决。
 
 「账号」页的「自动续签」一行会告诉你当前是否已保存会话。保存了就不需要你再管令牌；没保存（比如手动粘贴令牌）就只在那一次有效。
+
+### 多个账号：存着，随手切
+
+以前一个 profile 只认一个登录：扫码换人，上一个人的令牌就被覆盖了，想换回来只能再扫一次。现在每个账号各占一条凭证记录，面板「账号」页把它们列出来。
+
+```
+dsh-cnb/accounts              账户索引：名字、时间、健康状态 —— 不含令牌
+dsh-cnb/account-<id>          每个账户自己的令牌 + 会话
+dsh-cnb/cnb-token             当前生效的那一条（始终是上面某一条的副本）
+```
+
+「当前」那条仍然是唯一权威：API 客户端、网关、令牌自检全读它，所以切换只是把某条记录复制过去再动一个指针——**没有第二条读取路径，也就没有"面板看着是 A、实际用 B"这种错位**。
+
+面板上每个账户可以：
+
+- **切换**：一次点击，不扫码。令牌过期了会先用这个账户自己的会话自动重签，成功才报切换完成；重签失败会明说「已切换，但自动重签失败」，而不是假装一切正常。
+- **改名**：「公司号」「小号」这种。改名之后再次扫码登录同一个人，名字不会被冲掉。
+- **删除**：先确认。删的是当前账户就自动切到最近用过的另一个；删光就是退出登录。
+
+识别"同一个人"用的是 CNB 的 `username`，不是昵称——改显示名不会变成两个账户，重新扫码也不会多出一条。导入令牌（`login.importToken`）同样走这套，所以扫码和粘贴的账户在同一个列表里。
+
+**退出登录只清当前账户**：其它账户的令牌原样留着，`kept` 会告诉面板还剩几个。因为「退出」的意思是"现在不用这个账号"，不是"把这些令牌都烧了"；真要删某个账户用「删除」。
+
+账户列表里没有任何机密：只有名字、用户名、时间戳，和 `有令牌`/`有会话` 两个布尔。令牌本身只在那条按 id 读取的 payload 里，浏览器永远拿不到。
+
+工具侧对应四个：`cnb_accounts` / `cnb_account_switch` / `cnb_account_rename` / `cnb_account_remove`，agent 可以直接"换成小号再看一眼仓库"。
 
 ### 令牌自检
 
@@ -609,6 +636,10 @@ configEditor / profile patch 写好了 provider      →  新会话默认用它
 | `cnb_gateway_configure` | `repo` `route` `model` `makeDefault` | 写入 `llm-pi-ai` 路由 |
 | `cnb_login_scopes` | — | 列出 CNB 可授权的权限项及级别 |
 | `cnb_token_doctor` | — | 逐接口探测令牌能做什么、缺哪个权限项 |
+| `cnb_accounts` | — | 已保存的账户列表：当前是哪个、各自令牌/会话状态、最近使用时间（只有元数据，无令牌） |
+| `cnb_account_switch` | `id` | 切换当前账户，之后的 `cnb_*` 与网关都用它；无需扫码，过期会自愈 |
+| `cnb_account_rename` | `id` `label` | 给账户改个好认的名字；留空恢复默认 |
+| `cnb_account_remove` | `id` | 删掉一个账户；删的是当前账户就自动切到最近用过的另一个，删光等于退出登录 |
 | `cnb_cloud_gateway` | `org` `name` `visibility` `image` `models` `port` `route` `makeDefault` `waitMs` | **全自动开通云网关**：建仓库 → 写脚手架 → 云原生启动 → 采集 → 校验 → 写 provider |
 | `cnb_cloud_gateway_harvest` | `repo` `sn` `waitMs` | 重新从环境日志采集地址与 key（环境重建后用） |
 | `cnb_cloud_gateway_verify` | `url` `key` `model` | 从本机真打一次云网关 |

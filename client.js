@@ -365,6 +365,139 @@ window.__ModuleLoader__.load({
 
     /** Service names the doctor reports, in the panel's own words. */
     /**
+     * What each account state means to a person, and how it is tinted.
+     *
+     * The host reports a state id derived from stored metadata, not a live probe, so
+     * the label claims exactly that and no more: "可用" means a token is stored and has
+     * not lapsed, not that CNB just answered.
+     */
+    const ACCOUNT_HEALTH = {
+      ok: { label: '可用', tone: 'ok' },
+      'session-only': { label: '仅会话', tone: 'warn' },
+      'expired-session': { label: '已过期·可自动重签', tone: 'warn' },
+      expired: { label: '已过期', tone: 'err' },
+      unknown: { label: '无凭证', tone: 'err' },
+    }
+
+    /**
+     * The saved-account list: who is stored, which one is in use, and the three
+     * actions that matter (switch, rename, delete).
+     *
+     * Switching is the point of the whole feature, so it is one click and needs no
+     * scan — the credential is already on disk. Deleting asks first, because it
+     * destroys a token that only another scan can restore.
+     */
+    function AccountList({ vault, busy, onSwitch, onRename, onRemove }) {
+      const [renaming, setRenaming] = useState(null)
+      const [draft, setDraft] = useState('')
+
+      if (vault === null || vault === undefined) return null
+      if (vault.count === 0) return null
+
+      const submitRename = (id) => {
+        onRename(id, draft.trim())
+        setRenaming(null)
+        setDraft('')
+      }
+
+      return h(
+        'section',
+        { className: 'dcnb-card' },
+        h(
+          'div',
+          { className: 'dcnb-row' },
+          h('h2', { style: { margin: 0 } }, '已保存的账户'),
+          h('span', { className: 'dcnb-spacer' }),
+          h('span', { className: 'dcnb-muted', style: { fontSize: 11 } }, `${vault.count} 个`),
+        ),
+        vault.issue === null || vault.issue === undefined
+          ? null
+          : h('p', { className: 'dcnb-muted', style: { margin: '6px 0 0', fontSize: 11 } }, vault.issue),
+        h(
+          'div',
+          { className: 'dcnb-list', style: { marginTop: 10 } },
+          vault.accounts.map((entry) => {
+            const health = ACCOUNT_HEALTH[entry.health] ?? { label: entry.health, tone: null }
+            const who = entry.nickname ?? entry.username ?? entry.description ?? '未命名'
+            return h(
+              'div',
+              { key: entry.id, className: 'dcnb-item', 'data-active': entry.active === true },
+              h(
+                'div',
+                { className: 'dcnb-main' },
+                h(
+                  'div',
+                  { className: 'dcnb-title' },
+                  h('span', null, entry.label),
+                  entry.active ? h('span', { className: 'dcnb-tag', 'data-tone': 'ok' }, '当前') : null,
+                  h('span', { className: 'dcnb-tag', 'data-tone': health.tone ?? undefined }, health.label),
+                ),
+                h(
+                  'div',
+                  { className: 'dcnb-muted', style: { fontSize: 11, marginTop: 3 } },
+                  [
+                    entry.username === null ? null : `@${entry.username}`,
+                    entry.username === null || entry.username === who ? null : who,
+                    entry.tokenStored ? '有令牌' : '无令牌',
+                    entry.sessionStored ? '有会话' : '无会话',
+                    entry.lastUsedAt === null ? null : `上次使用 ${new Date(entry.lastUsedAt).toLocaleString()}`,
+                  ]
+                    .filter(Boolean)
+                    .join(' · '),
+                ),
+                renaming === entry.id
+                  ? h(
+                      'div',
+                      { className: 'dcnb-row', style: { marginTop: 8 } },
+                      h('input', {
+                        className: 'dcnb-input',
+                        placeholder: '给这个账户起个名字',
+                        value: draft,
+                        maxLength: 48,
+                        onChange: (event) => setDraft(event.target.value),
+                        onKeyDown: (event) => {
+                          if (event.key === 'Enter') submitRename(entry.id)
+                          if (event.key === 'Escape') setRenaming(null)
+                        },
+                      }),
+                      h('button', { className: 'dcnb-btn', disabled: busy, onClick: () => submitRename(entry.id) }, '保存'),
+                      h('button', {
+                        className: 'dcnb-btn',
+                        onClick: () => {
+                          setRenaming(null)
+                          setDraft('')
+                        },
+                      }, '取消'),
+                    )
+                  : null,
+              ),
+              h(
+                'div',
+                { className: 'dcnb-row' },
+                entry.active
+                  ? null
+                  : h('button', { className: 'dcnb-btn', 'data-tone': 'primary', disabled: busy, onClick: () => onSwitch(entry.id) }, '切换'),
+                h(
+                  'button',
+                  {
+                    className: 'dcnb-btn',
+                    disabled: busy,
+                    onClick: () => {
+                      setRenaming(entry.id)
+                      setDraft(entry.label)
+                    },
+                  },
+                  '改名',
+                ),
+                h('button', { className: 'dcnb-btn', 'data-tone': 'danger', disabled: busy, onClick: () => onRemove(entry) }, '删除'),
+              ),
+            )
+          }),
+        ),
+      )
+    }
+
+    /**
      * How each probe is presented: what it means to the person, not the endpoint
      * name. `kind` separates reads from writes so the list can group them, and
      * `summary` turns the raw probe payload into one readable line.
@@ -739,8 +872,11 @@ window.__ModuleLoader__.load({
         try {
           stopPolling()
           setAttempt(null)
-          await callApi('login.logout', {})
-          setMessage('已退出登录，本地令牌已清除')
+          const result = await callApi('login.logout', {})
+          // With a vault the remaining accounts are still there, so say what survived
+          // instead of a flat "已退出登录" that implies everything is gone.
+          const kept = result?.logout?.kept ?? 0
+          setMessage(kept > 0 ? `已退出当前账号，另有 ${kept} 个账号仍保存在列表里` : '已退出登录，本地令牌已清除')
           onRefresh()
         } catch (logoutError) {
           setError(logoutError.message)
@@ -776,6 +912,63 @@ window.__ModuleLoader__.load({
           setBusy(false)
         }
       }, [onRefresh, tokenValue])
+
+      /** Switch the active credential to another saved account; no scan involved. */
+      const switchAccount = useCallback(async (id) => {
+        setBusy(true)
+        setError(null)
+        setMessage(null)
+        try {
+          const result = await callApi('accounts.switch', { id })
+          const who = result.status?.user?.nickname ?? result.status?.user?.username ?? result.label ?? '账户'
+          if (result.healed !== null && result.healed !== undefined && !result.healed.ok) {
+            // The switch itself succeeded; only the automatic repair failed. Say both,
+            // because "已切换" over a dead token would be a half-truth.
+            setError(`已切换到 ${who}，但自动重签失败：${result.healed.reason ?? '原因未知'}。该账户可能需要重新扫码。`)
+          } else {
+            setMessage(`已切换到 ${who}`)
+          }
+          onRefresh()
+        } catch (switchError) {
+          setError(switchError.message)
+        } finally {
+          setBusy(false)
+        }
+      }, [onRefresh])
+
+      const renameAccount = useCallback(async (id, label) => {
+        setBusy(true)
+        setError(null)
+        try {
+          await callApi('accounts.rename', { id, label })
+          setMessage(label === '' ? '已恢复默认名称' : `已改名为 ${label}`)
+          onRefresh()
+        } catch (renameError) {
+          setError(renameError.message)
+        } finally {
+          setBusy(false)
+        }
+      }, [onRefresh])
+
+      const removeAccount = useCallback(async (entry) => {
+        if (!window.confirm(`从本机删除账户「${entry.label}」？删除后要恢复它必须重新扫码登录。`)) return
+        setBusy(true)
+        setError(null)
+        try {
+          const result = await callApi('accounts.remove', { id: entry.id })
+          const next = (result.vault?.accounts ?? []).find((row) => row.id === result.switchedTo)
+          setMessage(
+            result.switchedTo === null
+              ? `已删除「${entry.label}」，没有其它账户了`
+              : `已删除「${entry.label}」，并切换到${next === undefined ? '下一个账户' : `「${next.label}」`}`,
+          )
+          onRefresh()
+        } catch (removeError) {
+          setError(removeError.message)
+        } finally {
+          setBusy(false)
+        }
+      }, [onRefresh])
 
       const user = status?.user
       const account = status?.account
@@ -825,6 +1018,15 @@ window.__ModuleLoader__.load({
               )
             : h(LoginPanel, { status, busy, attempt, error, onBegin: begin }),
         ),
+        // The saved accounts sit directly under the active one: switching is the
+        // action this whole section exists for, so it must not be buried.
+        h(AccountList, {
+          vault: status?.vault,
+          busy,
+          onSwitch: switchAccount,
+          onRename: renameAccount,
+          onRemove: removeAccount,
+        }),
         status?.health === 'session-only'
           ? h(
               Banner,

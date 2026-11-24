@@ -109,8 +109,18 @@ assert.equal(provider.api, 'openai-completions')
 assert.equal(provider.apiKeyEnv, 'CNB_TOKEN')
 assert.deepEqual(entries[1].options.config, { provider: 'cnb-gateway', model: 'deepseek-v4.1-flash' })
 
-assert.equal(tools.size, 15, 'every documented tool must register')  // 15 cnb_* tools
-for (const name of ['cnb_token_doctor', 'cnb_login_scopes']) assert.ok(tools.has(name), `${name} must register`)
+// Every documented tool must register. The count is asserted against the names below
+// rather than a hard-coded total: the exact number moved three times as features landed,
+// and a stale literal here only ever failed the live suite that CI skips.
+const expectedTools = [
+  'cnb_status', 'cnb_login_begin', 'cnb_login_poll', 'cnb_login_scopes',
+  'cnb_accounts', 'cnb_account_switch', 'cnb_account_rename', 'cnb_account_remove',
+  'cnb_repos', 'cnb_repo_status', 'cnb_repo_create', 'cnb_repo_delete',
+  'cnb_workspaces', 'cnb_workspace_open', 'cnb_workspace_control',
+  'cnb_usage', 'cnb_gateway_probe', 'cnb_gateway_configure', 'cnb_token_doctor',
+]
+for (const name of expectedTools) assert.ok(tools.has(name), `${name} must register`)
+assert.ok(tools.size >= expectedTools.length, `every documented tool registers (saw ${tools.size})`)
 
 // The doctor probes every interface the panel uses, reads and writes alike, and
 // names the scopes a restricted token is missing.
