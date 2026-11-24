@@ -17,6 +17,7 @@ CNB（[cnb.cool](https://cnb.cool)）接入 DeepSeek​ Harness 的插件：扫�
 | 组织用量 | 用量 | `cnb_usage` | 额度 + 当月用量，构建/开发核时、GPU、Git、对象存储、AI Credits |
 | 网关模型 | 网关模型 | `cnb_gateway_probe` `cnb_gateway_configure` | 探测仓库的 CNB AI 网关，并写入 `llm-pi-ai` 路由 |
 | 云网关 | 云网关 | `cnb_cloud_gateway` `cnb_cloud_gateway_harvest` `cnb_cloud_gateway_verify` `cnb_cloud_gateway_wire` | **全自动**：建仓库 → 写零依赖代理 → 云原生启动 → 采集公开地址 → 校验 → 写 provider。含 11288 / 11128 风控适配 |
+| 仓库清理 | 仓库 | `cnb_repos_delete` `cnb_cleanup_status` `cnb_cleanup_settings` `cnb_cleanup_cycle` `cnb_cleanup_environments` `cnb_cleanup_setup` | 批量删除（勾选 / 按条件，必须 `confirm: true`）；云网关建的仓库没人用了自动删掉（默认关闭）；已结束的开发环境记录自动清理（默认开启） |
 
 ## 安装
 
@@ -33,7 +34,7 @@ dsh plugin --profile <profile> add /绝对路径/dsh-cnb
 
 `dsh plugin` 转发给 pnpm，所以本地目录要用**绝对路径**。
 
-装完在 dsh 的 Web 界面侧边栏会出现 **CNB** 入口，同时注册 27 个 `cnb_*` 工具给 agent。
+装完在 dsh 的 Web 界面侧边栏会出现 **CNB** 入口，同时注册 33 个 `cnb_*` 工具给 agent。
 
 配置项只有一个可选的覆盖点，写在 `cordis.patch.yml` 里：
 
@@ -617,6 +618,86 @@ configEditor / profile patch 写好了 provider      →  新会话默认用它
 - 新仓库的 AI 网关是否开通由组织决定；没开通时校验那一步会给出 `MODEL_NOT_IN_LIST` / 模型不可用，并列出真实放行的 id。
 - 采集依赖 stage 日志，所以环境必须真的把 stage 跑起来；YAML 缩进错误这类问题会让 stage 静默不入队 —— `test/cloud-provision.test.mjs` 用真实 YAML 解析器断言结构，就是为了挡这一类。
 
+## 仓库清理：批量删除，以及云网关仓库的自动回收
+
+「一键开通云网关」每跑一次就建一个新仓库 —— 这是那条链路的必然结果：网关只接受流水线令牌，而流水线令牌与仓库绑定，所以每个网关都必须有自己的仓库。跑几次之后，组织里就会堆积一堆 `dsh-gateway-20260101-000000` 这种没人再用、却还在占 Git 存储的东西。
+
+「仓库」页为此有两块能力。
+
+### 批量删除
+
+列表每一行前面有勾选框，勾上之后出现操作条：
+
+- **预览删除** —— 只列出会删哪些，**一个请求都不发**；
+- **删除选中的 N 个** —— 二次确认后真的删。
+
+预览与真删调的是同一个后端操作（`cleanup.delete`），区别只有 `confirm`，所以预览里看到的清单一定就是真删时的清单。
+
+按条件也可以（工具侧）：`filter.prefix` / `filter.search` / `filter.gatewayOnly`。**无条件批量删除不可用** —— 「什么都不填」等于「整个账号全删」，那不是一个可用的默认值，要删就请用 `repos` 显式列出。
+
+三样东西永远被跳过：
+
+| 跳过原因 | 为什么 |
+| --- | --- |
+| 正在承载云网关的仓库 | 它由配置里 provider 的 `displayName: CNB 云网关 (org/repo)` 指出；删了模型当场全断，而且看不出是谁删的 |
+| dsh 自己所在的仓库（`CNB_REPO_SLUG`） | 那是在把正在跑的这套工具连根拔掉 |
+| `keep` 名单里的 | 显式声明的保留项 |
+
+受保护的那一行，勾选框是**禁用**的 —— 给一个勾得上却永远删不掉的框，比不给更糟。
+
+### 自动清理
+
+设置驱动的清理。**三条规则是硬的，没有任何配置项能放开：**
+
+| 规则 | 含义 |
+| --- | --- |
+| 环境开着 → 仓库受保护 | 人可能正在里面改东西，删掉会连未提交的工作一起抹掉。**关掉环境之后**才进入清理范围 |
+| 只碰云网关仓库 | 判据：名字 `dsh-gateway-<日期>-<时间>`，或描述里有「由 dsh-cnb 自动创建」（改过名的靠后者仍能认出） |
+| 自建仓库不自动删 | 它们的价值判断只有人能做。要删请手动勾选 —— 那是明确的意图，不是启发式的猜测 |
+
+满足上面三条，再超过 `maxAgeHours` 没有活动，才会被删。
+
+这三条曾经各有一个「开关」（`deleteRunning`、`scope: 'all'`、`scope: 'prefix'`）。它们被移除了：一个能被配置绕过的保护，比没有保护更糟 —— 它看起来像保护。`test/cleanup.test.mjs` 第 12 组穷举了这些设置组合，断言每一种都删不掉该保护的东西。
+
+**默认关闭。** 删除不可逆，装个插件不该替人做这个决定。开启后有两层：
+
+- **本进程内定时器** —— 面板开着、dsh 在跑时有效，改设置立刻重排；
+- **云端 crontab** —— `cnb_cleanup_setup` 生成的 `.cnb.yml` 片段，dsh 关掉之后仍然有效。
+
+只有第一层是常见的假自动化：进程一停就什么都没发生，而界面上看起来「已开启」。所以面板会把两条路径各自的状态都报出来（「进程内定时器：未运行」是一件要显示的事）。
+
+两条路径的判据**必须一致**，因为不一致的症状是「云端删掉了一个本机不会删的仓库」，不可逆且现场已消失。做法是把同一组常量（名字正则、描述标记、阈值、保护名单）以 JSON 注入云端脚本，`test/cleanup-script.test.mjs` 用同一批夹具分别喂给两边、逐条比对结论 —— 注释里写「保持一致」没有保证力，逐条比对才有。
+
+云端脚本用 base64 带进 stage，不是 heredoc：YAML 的块标量要求每行缩进，而 heredoc 结束符必须顶格，两者直接冲突（实测会把整份 `.cnb.yml` 解析坏，而生成函数「成功返回」了一段看起来没问题的字符串）。`test/cleanup-cronfile.test.mjs` 用真实 YAML 解析器把片段解析一遍、再把脚本解回来 `node --check` 一遍。
+
+需要注意的边界：
+
+- 云端脚本走 Open API，根组织下的仓库跨不过 `errcode 9` —— 那些会记成 `DSH_CLEANUP_FAILED`，要打开面板用登录会话删（面板会自动改走控制台路由）。
+- 需要 `CNB_CLEANUP_TOKEN` 这个 secret，且它应该是一个**只用于清理**的令牌，不要复用登录用的那个。
+- 环境列表读不到时，云端脚本**什么都不删** —— 不知道有没有人在用，就不动手。
+- 片段里 bake 的是**生成那一刻**的设置；改完设置要重新生成，否则云端还按旧阈值判断。
+
+### 开发环境记录也清
+
+「开发环境」列表会一直长：每启动一次就是一个环境记录，结束了也留在那里。它和仓库清理是**两条独立的开关**，理由是把风险和收益分开：
+
+| | 默认 | 为什么 |
+| --- | --- | --- |
+| 仓库 | **关闭** | 删错一个仓库是真的丢代码，不可逆 |
+| 环境记录 | **开启，只清 `closed`** | 删的是一条历史，不承载任何数据 |
+
+环境记录这条的三条判据：
+
+- 状态必须是 `closed`（`envScope: 'all'` 放宽到别的状态，但见下一条）；
+- 超过 `envMaxAgeHours`，默认 168 小时 / 7 天 —— 刚结束的那次多半还要回看日志；
+- **运行中的环境永远不动**，没有任何开关能放开。
+
+最后一条是硬的，且没有开关能放开它。
+
+面板上这块有独立的「预览」和「清掉已结束的」，和「现在跑一轮」分开 —— 后者会连带删仓库，而这里的意图只有「列表太长了，把结束的收掉」。绑在一个按钮上，早晚会有人只是想清列表却删了仓库。
+
+云端 crontab 里也跑这一半（`DSH_CLEANUP_ENV_*` 标记），判据与本机逐条比对过，见 `test/cleanup-script.test.mjs` 第 8 组。
+
 ## 工具清单
 
 | 工具 | 参数 | 作用 |
@@ -644,6 +725,12 @@ configEditor / profile patch 写好了 provider      →  新会话默认用它
 | `cnb_cloud_gateway_harvest` | `repo` `sn` `waitMs` | 重新从环境日志采集地址与 key（环境重建后用） |
 | `cnb_cloud_gateway_verify` | `url` `key` `model` | 从本机真打一次云网关 |
 | `cnb_cloud_gateway_wire` | `repo` `baseURL` `key` `models` `route` `makeDefault` | 只写 provider（跳过建仓库那一步） |
+| `cnb_repos_delete` | `repos` \| `filter` `confirm` `dryRun` `stopEnvironments` `limit` | 批量删仓库：显式列出或按条件选；不传 `confirm` 只预演 |
+| `cnb_cleanup_status` | — | 清理设置、保护名单、上次结果、进程内定时器状态 |
+| `cnb_cleanup_settings` | `enabled` `maxAgeHours` `keep` `intervalMinutes` `dryRun` `environments` `envScope` `envMaxAgeHours` | 读写自动清理设置，写完立刻重排定时器。范围与「运行中保护」不是配置项 |
+| `cnb_cleanup_cycle` | `force` `dryRun` | 立刻跑一轮（`enabled: false` 时只出计划） |
+| `cnb_cleanup_environments` | `dryRun` `envScope` `envMaxAgeHours` `environments` | 清掉已结束的开发环境记录；运行中的永远不动 |
+| `cnb_cleanup_setup` | `repo` `intervalMinutes` | 生成 dsh 关掉后仍生效的 .cnb.yml crontab 片段 |
 
 ## 实现要点
 

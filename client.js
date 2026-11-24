@@ -1101,14 +1101,52 @@ window.__ModuleLoader__.load({
       const [actionMessage, setActionMessage] = useState(null)
       const [busy, setBusy] = useState(false)
       const [links, setLinks] = useState(null)
+      /**
+       * 批量删除的勾选集合。
+       *
+       * 用对象而不是 Set：React 的 `useState` 只有引用变了才重渲染，而 Set 的
+       * 原地 add/delete 改的是同一个引用 —— 勾了但界面不动，是最难查的一类 bug。
+       */
+      const [selected, setSelected] = useState({})
+      const [bulk, setBulk] = useState(null)
       const repos = useApiState(() => callApi('repos.list', {}), [])
       const groups = useApiState(() => callApi('usage.list', {}), [])
+      const cleanup = useApiState(() => callApi('cleanup.status', {}), [])
 
       const items = useMemo(() => {
         const all = repos.data?.items ?? []
         const needle = query.trim().toLowerCase()
         return needle === '' ? all : all.filter((repo) => String(repo.slug).toLowerCase().includes(needle))
       }, [repos.data, query])
+
+      /** 当前可见（过滤后）里哪些被勾上了 —— 全选按钮只作用于可见范围。 */
+      const selectedVisible = useMemo(
+        () => items.filter((repo) => selected[repo.slug] === true).map((repo) => repo.slug),
+        [items, selected],
+      )
+      const allVisibleSelected = items.length > 0 && selectedVisible.length === items.length
+
+      const toggle = useCallback((slug) => {
+        setSelected((current) => {
+          const next = { ...current }
+          if (next[slug] === true) delete next[slug]
+          else next[slug] = true
+          return next
+        })
+      }, [])
+
+      const toggleAll = useCallback(() => {
+        setSelected((current) => {
+          if (allVisibleSelected) {
+            const next = { ...current }
+            for (const repo of items) delete next[repo.slug]
+            return next
+          }
+          const next = { ...current }
+          for (const repo of items) next[repo.slug] = true
+          return next
+        })
+      }, [allVisibleSelected, items])
 
       const act = useCallback(
         async (label, fn) => {
@@ -1128,7 +1166,96 @@ window.__ModuleLoader__.load({
         [repos],
       )
 
+      /**
+       * 批量删除：先预演，再确认。
+       *
+       * 「预览」和「真删」调的是同一个后端操作（`cleanup.delete`），区别只有
+       * `confirm` —— 所以预览里显示的清单一定就是真删时的清单，不会出现
+       * 「预览说删 3 个、实际删了 5 个」这种分叉。
+       */
+      const runBulk = useCallback(
+        async (confirmed) => {
+          setBusy(true)
+          setActionError(null)
+          setActionMessage(null)
+          try {
+            const outcome = await callApi('cleanup.delete', {
+              repos: selectedVisible,
+              ...(confirmed ? { confirm: true } : {}),
+            })
+            setBulk(outcome)
+            if (outcome.deleted?.length > 0) {
+              setSelected({})
+              repos.reload()
+              setActionMessage(`已删除 ${outcome.deleted.length} 个仓库`)
+            }
+            if (outcome.failed?.length > 0) {
+              setActionError(`${outcome.failed.length} 个没删掉：${outcome.failed.map((row) => row.repo).join('、')}。${outcome.hint ?? ''}`)
+            } else if (!confirmed) {
+              setActionMessage(`预演：会删除 ${outcome.planned?.length ?? 0} 个仓库，确认后再点「确认删除」`)
+            }
+          } catch (error) {
+            setActionError(error.message)
+          } finally {
+            setBusy(false)
+          }
+        },
+        [repos, selectedVisible],
+      )
+
+      const saveCleanup = useCallback(
+        async (patch) => {
+          setBusy(true)
+          setActionError(null)
+          setActionMessage(null)
+          try {
+            const result = await callApi('cleanup.settings', patch)
+            setActionMessage(result.settings.enabled
+              ? `自动清理已开启：每 ${result.settings.intervalMinutes} 分钟检查一次`
+              : '自动清理已关闭')
+            cleanup.reload()
+          } catch (error) {
+            setActionError(error.message)
+          } finally {
+            setBusy(false)
+          }
+        },
+        [cleanup],
+      )
+
+      const runCycle = useCallback(async () => {
+        setBusy(true)
+        setActionError(null)
+        setActionMessage(null)
+        try {
+          const outcome = await callApi('cleanup.cycle', {})
+          setBulk({
+            dryRun: outcome.dryRun,
+            planned: (outcome.plan?.candidates ?? []).map((row) => row.repo),
+            deleted: outcome.deleted ?? [],
+            failed: outcome.failed ?? [],
+            skipped: outcome.skipped ?? [],
+            environments: outcome.environments ?? null,
+          })
+          const envNote = outcome.environments === null || outcome.environments === undefined
+            ? ''
+            : `，环境记录 ${outcome.environments.deleted?.length ?? 0} 条`
+          setActionMessage(outcome.disabled
+            ? `仓库自动清理未开启，这一轮只清了环境记录${envNote}`
+            : `这一轮删除 ${outcome.deleted?.length ?? 0} 个仓库${envNote}`)
+          repos.reload()
+          cleanup.reload()
+        } catch (error) {
+          setActionError(error.message)
+        } finally {
+          setBusy(false)
+        }
+      }, [cleanup, repos])
+
       if (!status?.loggedIn) return h(Banner, { tone: 'error' }, '请先在「账号」页扫码登录 CNB')
+
+      const settings = cleanup.data?.settings ?? null
+      const protectedRepos = cleanup.data?.protectedRepos ?? []
 
       return h(
         React.Fragment,
@@ -1166,7 +1293,38 @@ window.__ModuleLoader__.load({
               value: query,
               onChange: (event) => setQuery(event.target.value),
             }),
+            items.length === 0
+              ? null
+              : h(
+                  'button',
+                  { className: 'dcnb-btn', disabled: busy, onClick: toggleAll },
+                  allVisibleSelected ? '取消全选' : `全选可见（${items.length}）`,
+                ),
           ),
+          // 批量操作条：只在有勾选时出现，避免一片常驻的删除按钮。
+          selectedVisible.length === 0
+            ? null
+            : h(
+                'div',
+                { className: 'dcnb-row', style: { marginBottom: 10, padding: 8, border: '1px solid var(--dsw-alias-border-l1)', borderRadius: 8 } },
+                h('span', { className: 'dcnb-muted' }, `已选 ${selectedVisible.length} 个`),
+                h('span', { className: 'dcnb-spacer' }),
+                h('button', { className: 'dcnb-btn', disabled: busy, onClick: () => setSelected({}) }, '清空选择'),
+                h('button', { className: 'dcnb-btn', disabled: busy, onClick: () => runBulk(false) }, '预览删除'),
+                h(
+                  'button',
+                  {
+                    className: 'dcnb-btn',
+                    'data-tone': 'danger',
+                    disabled: busy,
+                    onClick: () => {
+                      if (!window.confirm(`确定删除这 ${selectedVisible.length} 个仓库？不可撤销，且会删除仓库全部数据。`)) return
+                      runBulk(true)
+                    },
+                  },
+                  `删除选中的 ${selectedVisible.length} 个`,
+                ),
+              ),
           repos.status === 'loading' && repos.data === null
             ? h(Spinner)
             : items.length === 0
@@ -1174,10 +1332,20 @@ window.__ModuleLoader__.load({
               : h(
                   'div',
                   { className: 'dcnb-list' },
-                  items.map((repo) =>
-                    h(
+                  items.map((repo) => {
+                    const guarded = protectedRepos.includes(repo.slug)
+                    const checked = selected[repo.slug] === true
+                    return h(
                       'div',
                       { key: repo.slug, className: 'dcnb-item' },
+                      h('input', {
+                        type: 'checkbox',
+                        checked,
+                        disabled: busy || guarded,
+                        onChange: () => toggle(repo.slug),
+                        title: guarded ? '正在承载云网关（或 dsh 自己所在的仓库），不参与批量删除' : '选中以批量删除',
+                        style: { marginTop: 2 },
+                      }),
                       h(
                         'div',
                         { className: 'dcnb-main' },
@@ -1189,6 +1357,7 @@ window.__ModuleLoader__.load({
                           repo.environments.length > 0
                             ? h('span', { className: 'dcnb-tag', 'data-tone': 'ok' }, `${repo.environments.length} 个环境`)
                             : null,
+                          guarded ? h('span', { className: 'dcnb-tag', 'data-tone': 'warn' }, '受保护') : null,
                         ),
                         h('div', { className: 'dcnb-muted', style: { marginTop: 2 } }, repo.description || '（无描述）'),
                       ),
@@ -1229,10 +1398,162 @@ window.__ModuleLoader__.load({
                           '删除',
                         ),
                       ),
-                    ),
-                  ),
+                    )
+                  }),
                 ),
         ),
+
+        // 批量 / 自动清理。两张卡：一次性的批量删除结果，与设置驱动的自动清理。
+        bulk === null
+          ? null
+          : h(
+              Card,
+              { title: bulk.dryRun === true ? '批量删除 · 预演结果' : '批量删除 · 结果' },
+              h(
+                'dl',
+                { className: 'dcnb-kv' },
+                h('dt', null, '计划'), h('dd', null, `${bulk.planned?.length ?? 0} 个`),
+                h('dt', null, '已删除'), h('dd', null, `${bulk.deleted?.length ?? 0} 个`),
+                h('dt', null, '失败'), h('dd', null, `${bulk.failed?.length ?? 0} 个`),
+              ),
+              (bulk.planned ?? []).length === 0
+                ? null
+                : h('div', { className: 'dcnb-mono', style: { marginTop: 8 } }, (bulk.planned ?? []).join('\n')),
+              // 预演时就要说清「哪些仓库还要先停环境」—— 等到点确认才第一次知道，
+              // 那会儿删除已经是不可逆的了。
+              (bulk.stopFirst ?? []).length === 0
+                ? null
+                : h('div', { className: 'dcnb-muted', style: { marginTop: 8 } },
+                    `其中 ${bulk.stopFirst.length} 个还有环境在跑，删除前会先停掉：${bulk.stopFirst.join('、')}`),
+              (bulk.failed ?? []).length === 0
+                ? null
+                : h('div', { className: 'dcnb-mono', style: { marginTop: 8, color: 'var(--dsw-alias-state-error-primary)' } },
+                    bulk.failed.map((row) => `${row.repo}：${row.error ?? ''}`).join('\n')),
+              h('button', { className: 'dcnb-btn', style: { marginTop: 8 }, onClick: () => setBulk(null) }, '收起'),
+            ),
+
+        h(
+          Card,
+          { title: '云网关仓库自动清理', extra: h('button', { className: 'dcnb-btn', onClick: cleanup.reload }, '刷新') },
+          h(
+            'p',
+            { className: 'dcnb-muted', style: { margin: '0 0 10px', lineHeight: 1.7 } },
+            '「一键开通云网关」每跑一次就建一个新仓库。这一块把不用的那些自动收掉。',
+            h('br'),
+            h('b', null, '只清本插件建的云网关仓库'), '（名字像 ',
+            h('code', { className: 'dcnb-mono' }, 'dsh-gateway-…'),
+            ' 或描述带插件标记）；你自建的仓库永远不会被自动删 —— 要删请到上面手动勾选。',
+            h('br'),
+            h('b', null, '环境还开着的仓库一律不动'), '，关掉之后才进入清理范围。这条没有开关。',
+            h('br'),
+            '默认', h('b', null, '关闭'), '：删除不可逆，装个插件不该替人做这个决定。',
+            settings?.enabled === true && cleanup.data?.timer === null
+              ? h('span', { style: { color: 'var(--dsw-alias-state-warn-primary)' } }, ' 设置里是开启的，但本进程内定时器没跑起来 —— 重启后会自动恢复。')
+              : null,
+          ),
+          /**
+           * 三种状态必须分开显示，不能都用「读取设置…」。
+           *
+           * 之前这里是 `settings === null ? Spinner : ...`：请求**失败**时
+           * `cleanup.data` 也是 null，于是界面永远停在「读取设置…」，把一次
+           * 明确的错误伪装成「还在加载」。用户唯一的线索是它一直不动。
+           *
+           * 实测踩过：宿主返回里带了不可序列化的对象，路由在写响应前断开，
+           * 浏览器得到 Empty reply，面板就卡在这里 —— 排查时完全没有信息。
+           */
+          cleanup.status === 'error'
+            ? h(Banner, null, `读取清理设置失败：${cleanup.error ?? '未知原因'}。点「刷新」重试；若一直失败，检查 dsh 日志里 /dsh-cnb/api/cleanup.status 的报错。`)
+            : settings === null
+              ? h(Spinner, { label: '读取设置…' })
+              : h(
+                React.Fragment,
+                null,
+                h(
+                  'div',
+                  { className: 'dcnb-grid', style: { marginBottom: 10 } },
+                  /*
+                   * 这里原来有一个「清理范围」下拉（网关仓库 / 前缀 / 全部）。
+                   * 去掉了：自动清理只该收回它自己建出来的东西，把范围做成选项
+                   * 等于允许它去删用户的仓库。范围不是配置项，是这条功能的定义。
+                   */
+                  h('label', { className: 'dcnb-muted' }, '多久没活动算不用了（小时）', h('br'),
+                    h('input', {
+                      className: 'dcnb-input',
+                      value: String(settings.maxAgeHours),
+                      disabled: busy,
+                      style: { width: '100%' },
+                      onChange: (event) => {
+                        const hours = Number(event.target.value)
+                        if (Number.isFinite(hours) && hours >= 1) saveCleanup({ ...settings, maxAgeHours: hours })
+                      },
+                    })),
+                  h('label', { className: 'dcnb-muted' }, '检查间隔（分钟）', h('br'),
+                    h('input', {
+                      className: 'dcnb-input',
+                      value: String(settings.intervalMinutes),
+                      disabled: busy,
+                      style: { width: '100%' },
+                      onChange: (event) => {
+                        const minutes = Number(event.target.value)
+                        if (Number.isFinite(minutes) && minutes >= 5) saveCleanup({ ...settings, intervalMinutes: minutes })
+                      },
+                    })),
+                ),
+                h(
+                  'div',
+                  { className: 'dcnb-row' },
+                  h('label', { className: 'dcnb-row', style: { gap: 6 } },
+                    h('input', {
+                      type: 'checkbox',
+                      checked: settings.enabled === true,
+                      disabled: busy,
+                      onChange: (event) => saveCleanup({ ...settings, enabled: event.target.checked }),
+                    }),
+                    h('span', { className: 'dcnb-muted' }, '开启自动删除'),
+                  ),
+                  /*
+                   * 「允许删还有环境在跑的」这个开关已移除：环境开着就受保护，
+                   * 不是可配置项。想删那种仓库，先关环境。
+                   */
+                  h('label', { className: 'dcnb-row', style: { gap: 6 } },
+                    h('input', {
+                      type: 'checkbox',
+                      checked: settings.dryRun === true,
+                      disabled: busy,
+                      onChange: (event) => saveCleanup({ ...settings, dryRun: event.target.checked }),
+                    }),
+                    h('span', { className: 'dcnb-muted' }, '只记录不真删'),
+                  ),
+                  h('span', { className: 'dcnb-spacer' }),
+                  h('button', { className: 'dcnb-btn', disabled: busy, onClick: runCycle }, '现在跑一轮'),
+                ),
+
+                h(
+                  'dl',
+                  { className: 'dcnb-kv', style: { marginTop: 10 } },
+                  h('dt', null, '设置来源'), h('dd', null, cleanup.data?.source ?? '—'),
+                  h('dt', null, '进程内定时器'),
+                  h('dd', null, cleanup.data?.timer === null || cleanup.data?.timer === undefined
+                    ? '未运行'
+                    : `每 ${cleanup.data.timer.intervalMinutes} 分钟，下次 ${cleanup.data.timer.nextAt}`),
+                  h('dt', null, '上次自动清理'),
+                  h('dd', null, cleanup.data?.lastRun === null || cleanup.data?.lastRun === undefined
+                    ? '—'
+                    : `${cleanup.data.lastRun.at} · 删 ${cleanup.data.lastRun.deleted ?? 0} · 失败 ${cleanup.data.lastRun.failed ?? 0}`),
+                  h('dt', null, '受保护（永不删）'),
+                  h('dd', { className: 'dcnb-mono' }, protectedRepos.length === 0 ? '—' : protectedRepos.join('、')),
+                ),
+                h(
+                  'p',
+                  { className: 'dcnb-muted', style: { margin: '10px 0 0', lineHeight: 1.7 } },
+                  '本进程内定时器只在 dsh 跑着的时候有效。要让它在你关掉 dsh 之后也继续，',
+                  '用 ',
+                  h('code', { className: 'dcnb-mono' }, 'cnb_cleanup_setup'),
+                  ' 生成 .cnb.yml 的 crontab 片段 —— 云端只负责按点触发，判据与本机是同一份代码。',
+                ),
+              ),
+        ),
+
         h(
           Card,
           { title: '新建仓库' },
@@ -1295,15 +1616,118 @@ window.__ModuleLoader__.load({
       )
     }
 
+/** 一条环境记录的唯一键：sn 优先，退回 pipeline_id。 */
+    function environmentKey(workspace) {
+      return String(workspace?.sn ?? workspace?.pipeline_id ?? '')
+    }
+
     function EnvironmentsTab({ status }) {
       const [repo, setRepo] = useState('')
       const [actionError, setActionError] = useState(null)
+      const [actionNote, setActionNote] = useState(null)
       const [links, setLinks] = useState(null)
       const workspaces = useApiState(() => callApi('workspaces.list', {}), [])
       const detail = useApiState(
         () => (repo.trim() === '' ? Promise.resolve(null) : callApi('repos.status', { repo: repo.trim() })),
         [repo],
       )
+      /**
+       * 多选集合。
+       *
+       * 用对象而不是 Set：`useState` 只有引用变了才重渲染，而 Set 的原地
+       * add/delete 改的是同一个引用 —— 勾了但界面不动，是最难查的一类 bug。
+       */
+      const [selected, setSelected] = useState({})
+      const [busy, setBusy] = useState(false)
+      const cleanup = useApiState(() => callApi('cleanup.status', {}), [])
+
+      const items = workspaces.data?.items ?? []
+      /** 运行中的环境不可选：停/删一个正在被用的环境会丢未提交的工作。 */
+      const isLive = (workspace) => String(workspace?.status ?? '').startsWith('running')
+      const selectedList = items.filter((workspace) => selected[environmentKey(workspace)] === true)
+      const selectableItems = items.filter((workspace) => !isLive(workspace))
+      const allSelected = selectableItems.length > 0 && selectableItems.every((workspace) => selected[environmentKey(workspace)] === true)
+
+      const toggle = useCallback((key) => {
+        setSelected((current) => {
+          const next = { ...current }
+          if (next[key] === true) delete next[key]
+          else next[key] = true
+          return next
+        })
+      }, [])
+
+      const toggleAll = useCallback(() => {
+        setSelected((current) => {
+          const next = { ...current }
+          if (allSelected) {
+            for (const workspace of selectableItems) delete next[environmentKey(workspace)]
+            return next
+          }
+          for (const workspace of selectableItems) next[environmentKey(workspace)] = true
+          return next
+        })
+      }, [allSelected, selectableItems])
+
+      /** 批量停 / 删选中的环境。 */
+      const actSelected = useCallback(async (action) => {
+        if (selectedList.length === 0) return
+        const verb = action === 'delete' ? '删除' : '停止'
+        setBusy(true)
+        setActionError(null)
+        setActionNote(null)
+        const done = []
+        const failed = []
+        for (const workspace of selectedList) {
+          try {
+            await callApi(
+              action === 'delete' ? 'workspaces.delete' : 'workspaces.stop',
+              { repo: workspace.slug, sn: workspace.sn },
+            )
+            done.push(environmentKey(workspace))
+          } catch (error) {
+            failed.push({ key: environmentKey(workspace), error: error.message })
+          }
+        }
+        setSelected((current) => {
+          const next = { ...current }
+          for (const key of done) delete next[key]
+          return next
+        })
+        setActionNote(`${verb} ${done.length} 个环境${failed.length === 0 ? '' : `，${failed.length} 个失败`}`)
+        if (failed.length > 0) setActionError(failed.map((row) => `${row.key}：${row.error}`).join('\n'))
+        workspaces.reload()
+        setBusy(false)
+      }, [selectedList, workspaces])
+
+      /**
+       * 一键清掉已结束的环境记录（自动清理那套判据的手动版）。
+       *
+       * 与「删除选中的」区别：这个走 `cleanup.environments`，用的是
+       * 「超过 envMaxAgeHours 的 closed」这条判据，所以它不会碰刚结束的那几个；
+       * 而勾选删除是「我现在就要删这些」，不看到期时间。
+       */
+      const cleanOld = useCallback(async (dryRun) => {
+        setBusy(true)
+        setActionError(null)
+        setActionNote(null)
+        try {
+          const outcome = await callApi('cleanup.environments', dryRun ? { dryRun: true } : {})
+          if (dryRun) {
+            setActionNote(`预演：会清掉 ${outcome.plannedCount ?? 0} 条已结束的记录（超过 ${outcome.settings?.envMaxAgeHours ?? 2} 小时）`)
+          } else {
+            setActionNote(`已清掉 ${outcome.deleted?.length ?? 0} 条环境记录`)
+            workspaces.reload()
+          }
+          if ((outcome.failed ?? []).length > 0) {
+            setActionError((outcome.failed ?? []).map((row) => `${row.sn}：${row.error}`).join('\n'))
+          }
+        } catch (error) {
+          setActionError(error.message)
+        } finally {
+          setBusy(false)
+        }
+      }, [workspaces])
 
       if (!status?.loggedIn) return h(Banner, { tone: 'error' }, '请先在「账号」页扫码登录 CNB')
 
@@ -1400,12 +1824,99 @@ window.__ModuleLoader__.load({
                       })
                     },
             }),
+        actionError === null ? null : h(Banner, null, actionError),
+        actionNote === null ? null : h(Banner, { tone: 'ok' }, actionNote),
         h(
           Card,
           {
             title: `我的开发环境 (${workspaces.data?.total ?? 0})`,
             extra: h('button', { className: 'dcnb-btn', onClick: workspaces.reload }, '刷新'),
           },
+          /*
+           * 环境记录清理放在这一页，和列表在一起 —— 因为要清的正是这个列表。
+           * 之前它藏在「仓库」页的清理卡片里，用户看着一长串环境却要去别处找按钮。
+           */
+          h(
+            'div',
+            { className: 'dcnb-row', style: { marginBottom: 10, paddingBottom: 10, borderBottom: '1px solid var(--dsw-alias-border-l1)' } },
+            h('span', { className: 'dcnb-muted' }, `共 ${workspaces.data?.total ?? items.length} 条，可勾选 ${selectableItems.length} 条`),
+            h('span', { className: 'dcnb-spacer' }),
+            h('button', { className: 'dcnb-btn', disabled: busy || items.length === 0, onClick: toggleAll },
+              allSelected ? `取消全选` : `全选（${selectableItems.length}）`),
+            h('button', { className: 'dcnb-btn', disabled: busy, onClick: () => cleanOld(true) }, '预览旧记录'),
+            h(
+              'button',
+              {
+                className: 'dcnb-btn',
+                disabled: busy,
+                title: `清理超过 ${cleanup.data?.settings?.envMaxAgeHours ?? 2} 小时前结束的环境记录`,
+                onClick: () => {
+                  if (!window.confirm('确定清掉已结束的环境记录？运行中的环境不会被动到。')) return
+                  cleanOld(false)
+                },
+              },
+              '清理已结束的',
+            ),
+          ),
+          /*
+           * 自动清理的开关就放在这个列表下面 —— 它管的就是这个列表。
+           *
+           * 之前它藏在「仓库」页里，用户看着一长串环境记录，却要跑去另一页找开关。
+           * 现在开关、手动按钮、列表在同一屏，因果关系是显然的。
+           */
+          h(
+            'div',
+            { className: 'dcnb-row', style: { marginBottom: 10, gap: 12 } },
+            h('label', { className: 'dcnb-row', style: { gap: 6 } },
+              h('input', {
+                type: 'checkbox',
+                checked: cleanup.data?.settings?.environments === true,
+                disabled: busy || cleanup.data === null,
+                onChange: async (event) => {
+                  setBusy(true)
+                  setActionError(null)
+                  try {
+                    await callApi('cleanup.settings', {
+                      ...(cleanup.data?.settings ?? {}),
+                      environments: event.target.checked,
+                    })
+                    setActionNote(event.target.checked ? '已开启自动清理已结束的环境记录' : '已关闭自动清理')
+                    cleanup.reload()
+                  } catch (error) {
+                    setActionError(error.message)
+                  } finally {
+                    setBusy(false)
+                  }
+                },
+              }),
+              h('span', { className: 'dcnb-muted' }, '自动清理已结束的记录'),
+            ),
+            h('span', { className: 'dcnb-muted', style: { fontSize: 11 } },
+              `超过 ${cleanup.data?.settings?.envMaxAgeHours ?? 2} 小时前结束的才会清；运行中的永远不动`),
+          ),
+          selectedList.length === 0
+            ? null
+            : h(
+                'div',
+                { className: 'dcnb-row', style: { marginBottom: 10, padding: 8, border: '1px solid var(--dsw-alias-border-l1)', borderRadius: 8 } },
+                h('span', { className: 'dcnb-muted' }, `已选 ${selectedList.length} 个`),
+                h('span', { className: 'dcnb-spacer' }),
+                h('button', { className: 'dcnb-btn', disabled: busy, onClick: () => setSelected({}) }, '清空选择'),
+                h('button', { className: 'dcnb-btn', disabled: busy, onClick: () => actSelected('stop') }, '停止选中的'),
+                h(
+                  'button',
+                  {
+                    className: 'dcnb-btn',
+                    'data-tone': 'danger',
+                    disabled: busy,
+                    onClick: () => {
+                      if (!window.confirm(`确定删除这 ${selectedList.length} 个环境？正在运行的不在可勾选范围内。`)) return
+                      actSelected('delete')
+                    },
+                  },
+                  `删除选中的 ${selectedList.length} 个`,
+                ),
+              ),
           workspaces.status === 'loading' && workspaces.data === null
             ? h(Spinner)
             : (workspaces.data?.items ?? []).length === 0
@@ -1413,10 +1924,20 @@ window.__ModuleLoader__.load({
               : h(
                   'div',
                   { className: 'dcnb-list' },
-                  (workspaces.data?.items ?? []).map((workspace) =>
-                    h(
+                  (workspaces.data?.items ?? []).map((workspace) => {
+                    const key = environmentKey(workspace)
+                    const live = isLive(workspace)
+                    return h(
                       'div',
                       { key: workspace.pipeline_id ?? workspace.sn, className: 'dcnb-item' },
+                      h('input', {
+                        type: 'checkbox',
+                        checked: selected[key] === true,
+                        disabled: busy || live,
+                        onChange: () => toggle(key),
+                        title: live ? '运行中的环境不参与批量操作（会丢未提交的工作）' : '选中以批量停止 / 删除',
+                        style: { marginTop: 2 },
+                      }),
                       h(
                         'div',
                         { className: 'dcnb-main' },
@@ -1496,8 +2017,8 @@ window.__ModuleLoader__.load({
                             })(),
                           )
                         : null,
-                    ),
-                  ),
+                    )
+                  }),
                 ),
         ),
         h(
