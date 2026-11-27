@@ -316,6 +316,63 @@ CNB_GATEWAY_TOKEN  ← 密钥仓库导入的
 
 有些部署用本地反向代理（`http://127.0.0.1:<port>/v1`）承担同样的改写，并通过 `--patch` 接管了 `llm-pi-ai`。那种情况下插件不会覆盖它：`--patch` 优先级高于 profile 层，DSH 会拒绝写入，面板会说明「由更高优先级的配置层接管」，并建议保持现状。
 
+## Issue 网关：借一次容器，给你一个真正的 OpenAI 接口
+
+网关只接受**流水线令牌**，而它只存在于运行中的环境里。于是插件提供了另一条路：**Issue / api_trigger 事件本身就能起一个一次性容器**，那个容器里有 `CNB_TOKEN`。反代把这条慢路径包成一个标准 OpenAI 端点：
+
+```
+GET  {baseURL}/models               # 免费模型清单，秒回
+POST {baseURL}/chat/completions     # 真正的 chat，支持 tools 与多轮
+```
+
+`baseURL` 默认按当前环境算（端口预览域名 > 容器 IP > 回环），也可以用 `issue.endpoint` / `cnb_issue_endpoint` 查当前该用什么地址。
+
+### 它支持什么
+
+| 能力 | 说明 |
+| --- | --- |
+| `tools` / `tool_choice` | 原样送上游，响应里给**结构化 `tool_calls`**，`finish_reason` 为 `tool_calls` |
+| 多轮 | `messages` 整段透传：`assistant.tool_calls`、`tool` 角色与 `tool_call_id` 都在，模型能看到工具跑出了什么 |
+| `stream: true` | 标准 SSE：`delta.tool_calls` 分片 + 末尾 `finish_reason` + `usage` + `[DONE]` |
+| `usage` | 上游的 token 统计原样带回，不做零填充 |
+| 内联工具调用 | 上游偶尔把调用写成正文里的 DSML 标记，这里翻译成结构化 `tool_calls`（只删标记的话工具不会执行） |
+
+一次真实的调用（`bash` 工具，两个来回）：
+
+```bash
+curl -sS $BASE/chat/completions -H 'content-type: application/json' -d '{
+  "model": "deepseek-v4.1-flash",
+  "messages": [{"role": "user", "content": "用 bash 跑 pwd"}],
+  "tools": [{"type": "function", "function": {
+    "name": "bash",
+    "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}
+  }}]
+}'
+# -> message.tool_calls = [{"function": {"name": "bash", "arguments": "{\"command\": \"pwd\"}"}}]
+#    finish_reason = "tool_calls"
+
+# 把结果回传，继续同一段对话：
+#   {"role":"assistant","tool_calls":[...]}, {"role":"tool","tool_call_id":"...","content":"/workspace"}, {"role":"user","content":"路径是什么？"}
+# -> message.content = "刚才 pwd 的输出是 /workspace"，finish_reason = "stop"
+```
+
+### 两条后端，行为一致
+
+| 后端 | 何时用 | 延迟 |
+| --- | --- | --- |
+| **本地桥** | dsh 自己跑在云环境里（进程里有 `CNB_TOKEN`），直连 `/-/ai-ide/v2/chat/completions` | 1–2 秒，零调度 |
+| **容器回落** | 不在云环境里；每次借一个一次性容器转发 | 数十秒（容器调度 + 推理） |
+
+两条路吃的是**同一个上游 payload**，也不再有任何一条把 `messages` 压成一句 question —— 所以「换个部署位置工具就不灵了」这类问题不会再出现。
+
+容器那条路怎么保证不丢字段：请求体在 Node 侧 `JSON.stringify` 后 base64 进容器，容器只做 `curl` 转发，**原始 SSE 以 base64 回传到构建日志**，解析全部在本机（`aggregateSse`）。容器里只有 `sh`/`awk`，让 awk 去抠 `tool_calls` 就是早先丢工具调用的原因。
+
+### 代价与限制
+
+- 每次容器回落都要等一次调度，**这是路径的物理属性**，不是可以优化掉的常数；并发上限 2，多余的排队而不是一起超时。
+- 单请求上限 7 分钟（容器调度 + 推理 + 回传）；模型特别慢时请调小 `max_tokens`。
+- 图片消息原样透传，但免费档模型未必支持视觉；这条路径不做降级改写。
+
 ## 云原生开发
 
 ### 启动不跳转，列出所有链接
