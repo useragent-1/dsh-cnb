@@ -21,10 +21,17 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import {
+  DEFAULT_MAX_TOKENS,
+  ISSUE_PROXY_CONCURRENCY,
+  ISSUE_PROXY_POLL_MS,
   completionResponse,
+  openAiChunk,
+  openAiFinalChunk,
   partsFromCompletion,
   upstreamPayloadFromBody,
 } from '../lib/issue-proxy.js'
+import { streamLocal } from '../lib/local-gateway.js'
+import http from 'node:http'
 import {
   RELAY_BEGIN,
   RELAY_END,
@@ -209,4 +216,83 @@ const HISTORY = [
   assert.equal(parts.content, '', '标记清掉后正文应为空，而不是留一段壳')
 }
 
-console.log('issue relay OK · 请求透传、容器只搬字节、tool_calls 与多轮在两条后端上都成立')
+// --- 6. 拉满：并发、预算、轮询间隔 ---------------------------------------
+{
+  // 默认值就是"拉满"后的值；env 能覆盖（容器配额吃紧时往回拧）。
+  assert.equal(ISSUE_PROXY_CONCURRENCY, 8, '默认并发应为 8（写死 2 会让排队白等）')
+  assert.equal(DEFAULT_MAX_TOKENS, 32_000, '默认输出预算应为 32k（4k 会把推理模型的正文截掉）')
+  assert.ok(ISSUE_PROXY_POLL_MS <= 1_500, '容器日志轮询应压到秒级以内')
+
+  const probe = (env) => execFileSync(process.execPath, [
+    '-e',
+    `import('${new URL('../lib/issue-proxy.js', import.meta.url).href}').then((m) => console.log([m.ISSUE_PROXY_CONCURRENCY, m.DEFAULT_MAX_TOKENS, m.ISSUE_PROXY_POLL_MS].join(',')))`,
+  ], { env: { ...process.env, ...env }, encoding: 'utf8' }).trim()
+
+  assert.equal(probe({ DSH_ISSUE_CONCURRENCY: '3', DSH_ISSUE_MAX_TOKENS: '8192', DSH_ISSUE_POLL_MS: '4000' }), '3,8192,4000')
+  // 非法值不许把并发变成 0（那会永久排队）。
+  assert.equal(probe({ DSH_ISSUE_CONCURRENCY: '0' }).split(',')[0], '8')
+  assert.equal(probe({ DSH_ISSUE_CONCURRENCY: 'abc' }).split(',')[0], '8')
+}
+
+// --- 7. 流式分片：delta 原样、收尾帧带 finish_reason + usage --------------
+{
+  const meta = { id: 'chatcmpl-t', created: 1, model: 'hy4' }
+  const chunk = openAiChunk({ content: '你' }, meta)
+  assert.equal(chunk.object, 'chat.completion.chunk')
+  assert.equal(chunk.choices[0].delta.content, '你')
+  assert.equal(chunk.choices[0].finish_reason, null)
+
+  const toolChunk = openAiChunk({ tool_calls: [{ index: 0, id: 'c1', type: 'function', function: { name: 'bash', arguments: '{"com' } }] }, meta)
+  assert.equal(toolChunk.choices[0].delta.tool_calls[0].function.name, 'bash', 'tool_calls 分片要原样转发')
+
+  const last = openAiFinalChunk('tool_calls', meta, { total_tokens: 9 })
+  assert.equal(last.choices[0].finish_reason, 'tool_calls')
+  assert.equal(last.usage.total_tokens, 9, 'usage 必须和 finish_reason 同帧给出')
+}
+
+// --- 8. streamLocal：边收边转，11128 偶发拦截要重试 -----------------------
+{
+  const SSE = [
+    `data: ${JSON.stringify({ choices: [{ index: 0, delta: { role: 'assistant', content: '你' } }] })}\n\n`,
+    `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: '好' } }] })}\n\n`,
+    'data: [DONE]\n\n',
+  ].join('')
+  let hits = 0
+  const server = http.createServer((request, reply) => {
+    hits += 1
+    request.resume()
+    if (hits === 1) {
+      // 第一次模拟内容指纹拦截：上游在响应体之前就拒。
+      reply.writeHead(400, { 'content-type': 'application/json' })
+      reply.end(JSON.stringify({ errmsg: 'Illegal API invocation from an unapproved channel', errcode: 11128 }))
+      return
+    }
+    reply.writeHead(200, { 'content-type': 'text/event-stream' })
+    reply.end(SSE)
+  })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const port = server.address().port
+
+  const events = []
+  let opened = 0
+  const streamed = await streamLocal({
+    model: 'hy4',
+    payload: { model: 'hy4', messages: [{ role: 'user', content: 'hi' }] },
+    token: 't',
+    repo: 'acme/x',
+    origin: `http://127.0.0.1:${port}`,
+    onOpen: () => { opened += 1 },
+    onEvent: (event) => events.push(event),
+  })
+  server.close()
+
+  assert.equal(streamed.ok, true)
+  assert.equal(hits, 2, '11128 必须重试一次')
+  assert.equal(opened, 1, 'onOpen 只在真正拿到 2xx 之后调用一次')
+  assert.equal(events.length, 2)
+  assert.equal(events.map((event) => event.choices[0].delta.content ?? '').join(''), '你好')
+  assert.equal(typeof streamed.firstEventMs, 'number')
+  assert.match(streamed.text, /\[DONE\]/)
+}
+
+console.log('issue relay OK · 请求透传、容器只搬字节、tool_calls 与多轮在两条后端上都成立、并发与流式拉满')
