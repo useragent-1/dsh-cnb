@@ -42,7 +42,15 @@ function writeScript(text) {
   return file
 }
 
-const NOW = new Date('2026-11-24T12:00:00Z')
+/**
+ * 时钟：**必须是"现在"，不能写死某一天**。
+ *
+ * 夹具里的 updatedAt/create_time 都是相对 NOW 算的，而云端脚本那一侧用的是真实的
+ * `Date.now()`（它就该如此 —— 线上没有注入点）。两边只有落在同一个"现在"附近才可比。
+ * 早先这里钉的是 `2026-11-24T12:00:00Z`，于是这套测试只在写它的那天是绿的：
+ * 隔三天再跑，"刚用过"的那条夹具在脚本眼里已是三天前，被判成可删，断言直接红。
+ */
+const NOW = new Date()
 const hoursAgo = (hours) => new Date(NOW.getTime() - hours * 3_600_000).toISOString()
 
 /**
