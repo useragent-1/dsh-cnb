@@ -66,6 +66,33 @@ group-resource:rw  group-manage:rw  group-delete:rw
 mission-delete:rw  mission-manage:rw
 ```
 
+### 二维码扫出来就报 `state is invalid`（≤ 0.19.2 的问题，已修）
+
+现象：二维码刚显示，第一次轮询就报
+
+```
+state is invalid. (errcode 3)
+```
+
+这张票其实从生成那一刻起就是无效的，和手速、微信号、网络都无关。
+
+原因是 `GET /login/state` 自己还会下发一个**票据绑定** cookie：
+
+```
+Set-Cookie: __Host-cnb_login_bind=…; Path=/; Max-Age=600; HttpOnly; Secure; SameSite=Lax
+```
+
+服务端把 `state`/`uuid` 和它绑在一起校验。旧代码只合并了 `/login` 的 `csrfkey`/`csrftoken`，漏掉这一个，于是每次轮询都是"有 state、有 uuid、没带票"——CNB 一律答 `errcode 3`，面板把英文原文当结论贴出来。
+
+0.19.3 起：
+
+- `/login/state` 的 `Set-Cookie` 一并进 cookie jar，轮询自然带齐三个 cookie；
+- 票据绑定 cookie（10 分钟）**不**再被当成会话寿命，不会把"还剩 14 天"报成 10 分钟后过期；
+- 万一票真的被判死（开了第二个登录窗口、二维码放置超过 10 分钟），面板**自动换一张新票**并说明原因，而不是留一行英文报错让你猜；
+- 只有 `errcode 3` 才算票失效，上游 5xx 之类的故障不会把会话判死。
+
+已装旧版的话，更新到 0.19.3 再重启即可，不需要清凭证。
+
 ### 权限不足时的替代路径
 
 两项权限没有放宽的余地，但**停止环境**有一条等价的替代路径：
@@ -132,7 +159,7 @@ CNB 的创建接口对一份"授予不了任何权限"的 scope 也返回成功�
 读取方式是看 CNB 确认登录时实际下发的 `Set-Cookie` 属性：
 
 - `Max-Age` 优先（按 RFC 6265 它压过 `Expires`），其次 `Expires`
-- 只认带生命周期的会话类 cookie（名称匹配 `session`/`alive`/`auth`/`token`/`login`）；`csrfkey`、`csrftoken` 没有生命周期，忽略
+- 只认带生命周期的会话类 cookie（名称匹配 `session`/`alive`/`auth`/`token`/`login`）；`csrfkey`、`csrftoken` 没有生命周期，忽略；票据绑定 cookie（`__Host-cnb_login_bind`，10 分钟）属于这张二维码而不是会话，也忽略
 - 服务端没给时长时，才回退到文档里的默认 7 天，并且**明确标注是估算**
 
 「账号」页显示成这样：

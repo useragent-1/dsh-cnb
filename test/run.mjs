@@ -15,6 +15,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 const suites = [
   ['scopes', 'scopes.test.mjs', false],
   ['login-state', 'login-state.test.mjs', false],
+  ['login-bind', 'login-bind.test.mjs', false],
   ['doctor', 'doctor.test.mjs', false],
   ['stop-fallback', 'stop-fallback.test.mjs', false],
   ['grants', 'grants.test.mjs', false],

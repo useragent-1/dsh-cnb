@@ -795,6 +795,9 @@ window.__ModuleLoader__.load({
       const [doctor, setDoctor] = useState(null)
       const [doctorBusy, setDoctorBusy] = useState(false)
       const timer = useRef(null)
+      // 票被服务端判死时的自动换票次数上限。只换一次：连着被判死说明问题不在
+      // 「这一张二维码」，继续自动重试只会把真正的原因刷掉。
+      const autoTicket = useRef(0)
 
       const stopPolling = useCallback(() => {
         if (timer.current !== null) {
@@ -841,6 +844,24 @@ window.__ModuleLoader__.load({
             stopPolling()
             setAttempt(null)
             setError('二维码已失效，请重新生成')
+          } else if (result.state === 'invalid') {
+            // 票被 CNB 判死（400 / errcode 3）。这一张二维码已经没有任何价值，
+            // 所以这里不摆英文报错让人自己点按钮 —— 直接换一张，并说明为什么。
+            stopPolling()
+            setAttempt(null)
+            setError(result.detail?.hint ?? '这张二维码的状态已失效，正在重新生成…')
+            if (autoTicket.current < 1) {
+              autoTicket.current += 1
+              setMessage('正在换一张新的二维码…')
+              callApi('login.begin', {})
+                .then((view) => {
+                  setAttempt(view)
+                  setError(null)
+                  stopPolling()
+                  timer.current = setTimeout(poll, 1500)
+                })
+                .catch((againError) => setError(againError.message))
+            }
           } else {
             timer.current = setTimeout(poll, 2000)
           }
@@ -853,6 +874,7 @@ window.__ModuleLoader__.load({
       const begin = useCallback(async () => {
         setError(null)
         setMessage(null)
+        autoTicket.current = 0
         setBusy(true)
         try {
           const view = await callApi('login.begin', {})
