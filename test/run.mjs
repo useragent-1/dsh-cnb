@@ -67,6 +67,7 @@ const suites = [
   ['model-discovery', 'model-discovery.test.mjs', false],
   ['session-adopt', 'session-adopt.test.mjs', false],
   ['provider-route', 'provider-route.test.mjs', false],
+  ['provider-defaults', 'provider-defaults.test.mjs', false],
   ['keepalive', 'keepalive.test.mjs', false],
   ['autokeep', 'autokeep.test.mjs', false],
   ['immortal', 'immortal.test.mjs', false],
