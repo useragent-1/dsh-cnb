@@ -19,6 +19,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { gunzipSync } from 'node:zlib'
 
 import {
   DEFAULT_MAX_TOKENS,
@@ -44,6 +45,22 @@ import { aggregateSse, completionToSse } from '../lib/gateway-proxy.js'
 
 const SCRATCH = mkdtempSync(join(tmpdir(), 'dsh-cnb-relay-'))
 process.on('exit', () => rmSync(SCRATCH, { recursive: true, force: true }))
+
+/**
+ * 把 `buildRelayScript` 生成的脚本里那份「压缩后的候选体阶梯」解回来。
+ *
+ * 脚本形态是 `G1='…' G2='…' …`，拼起来 → base64 -d → gunzip → 按 `\x01` 切分。
+ * 这个 helper 同时钉住了打包格式：读不出来就说明容器那侧也读不出来。
+ *
+ * @param {string} script
+ * @returns {unknown[]}
+ */
+function decodeRelayPayloads(script) {
+  const chunks = [...script.matchAll(/^G\d+='([^']*)'$/gm)].map((match) => match[1])
+  assert.ok(chunks.length > 0, '脚本里必须有 G1..Gn 分块')
+  const packed = gunzipSync(Buffer.from(chunks.join(''), 'base64')).toString('utf8')
+  return packed.split('\u0001').map((piece) => JSON.parse(piece))
+}
 
 const TOOLS = [{
   type: 'function',
@@ -117,12 +134,19 @@ const HISTORY = [
   assert.match(script, new RegExp(`echo ${RELAY_BEGIN}`))
   assert.match(script, new RegExp(`echo ${RELAY_END}`))
   assert.match(script, /base64 -d/)
+  // 请求体必须压缩后进容器：fork/exec 的单个参数上限是 128 KiB，
+  // 未压缩的请求体（system + tools 常到 100 KB → base64 后 135 KB）一进来就越界，
+  // 表现是 `argument list too long` 且脚本一行都不执行。
+  assert.match(script, /gzip -dc/)
+  assert.ok(Buffer.byteLength(script) < 131_072, '脚本总长必须低于内核单参数上限 128 KiB')
 
-  const encoded = /P1='([^']+)'/.exec(script)[1]
-  assert.deepEqual(JSON.parse(Buffer.from(encoded, 'base64').toString('utf8')), payload, 'payload 解回来必须一致（含 tools 与 tool 结果）')
+  const decoded = decodeRelayPayloads(script)
+  assert.equal(decoded.length, 1)
+  assert.deepEqual(decoded[0], payload, 'payload 解回来必须一致（含 tools 与 tool 结果）')
 
-  // 容器里不该再做解析：awk 抠不出 tool_calls，这正是旧实现丢工具的原因。
-  assert.doesNotMatch(script, /awk/, '容器脚本不该解析 JSON —— 交给本机的 aggregateSse')
+  // 容器里不该再做 JSON 解析：关键是把请求体原样搬过去。
+  // 允许用 awk 按 `\x01` 切分候选体（那是纯文本切分），但不该去抠 JSON 字段。
+  assert.doesNotMatch(script, /"content":\s*"\[\^"\]\*"/, '容器脚本不该解析 JSON —— 交给本机的 aggregateSse')
 
   // --- 2b. 阶梯也要进容器 ------------------------------------------------
   // 11128 是确定性的：容器里重发同一份 body 只会再被拦一次，所以候选体
@@ -133,14 +157,17 @@ const HISTORY = [
   writeFileSync(multiFile, multi, 'utf8')
   execFileSync('sh', ['-n', multiFile])
   assert.match(multi, new RegExp(`VARIANTS=${ladder.length}`))
+  const decodedLadder = decodeRelayPayloads(multi)
+  assert.equal(decodedLadder.length, ladder.length, '每一级候选体都必须进容器')
   for (let index = 0; index < ladder.length; index += 1) {
-    const b64 = new RegExp(`P${index + 1}='([^']+)'`).exec(multi)[1]
     assert.deepEqual(
-      JSON.parse(Buffer.from(b64, 'base64').toString('utf8')),
+      decodedLadder[index],
       ladder[index].body,
       `第 ${index} 级候选体必须完整进容器`,
     )
   }
+  // 阶梯脚本同样受 128 KiB 单参数上限约束。
+  assert.ok(Buffer.byteLength(multi) < 131_072, '带阶梯的脚本总长也必须低于 128 KiB')
   // 只有指纹类拒绝才升级：别的错误换形态也不会变好，多试一次就是白花一次容器。
   assert.match(multi, /\*11128\*\|\*11288\*\|\*"unapproved channel"\*/)
 }
