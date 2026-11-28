@@ -35,8 +35,10 @@ import { streamLocal } from '../lib/local-gateway.js'
 import { repairLadder } from '../lib/model-guard.js'
 import http from 'node:http'
 import {
+  MAX_SCRIPT_BYTES,
   RELAY_BEGIN,
   RELAY_END,
+  buildAskScript,
   buildRelayScript,
   extractRelayError,
   extractRelaySse,
@@ -170,6 +172,54 @@ const HISTORY = [
   assert.ok(Buffer.byteLength(multi) < 131_072, '带阶梯的脚本总长也必须低于 128 KiB')
   // 只有指纹类拒绝才升级：别的错误换形态也不会变好，多试一次就是白花一次容器。
   assert.match(multi, /\*11128\*\|\*11288\*\|\*"unapproved channel"\*/)
+}
+
+// --- 2c. ask 路径（压平的 question）也要受同一个上限约束 ------------------
+// 这条路径的输入是一句 question，看起来短，但多轮历史被压平后可以任意长。
+// 实测未压缩时 question 到 90000 字节脚本就长到 241557，越过 128 KiB 上限。
+{
+  for (const size of [1_000, 40_000, 90_000, 150_000]) {
+    const question = '问'.repeat(Math.floor(size / 3))
+    const ask = buildAskScript({ model: 'hy4', question })
+    const askFile = join(SCRATCH, `ask-${size}.sh`)
+    writeFileSync(askFile, ask, 'utf8')
+    execFileSync('sh', ['-n', askFile])
+    assert.ok(
+      Buffer.byteLength(ask) < MAX_SCRIPT_BYTES,
+      `question ${size} 字节时脚本 ${Buffer.byteLength(ask)} 字节，必须低于 ${MAX_SCRIPT_BYTES}`,
+    )
+    // 体积不能随 question 增长 —— 压缩后应当是常数级。
+    assert.ok(Buffer.byteLength(ask) < 20_000, 'ask 脚本应当与 question 长度基本无关')
+  }
+
+  // 解包后两段必须分别是请求体与问题正文，顺序不能错。
+  const question = '行1 "双引号" \\反斜杠 $HOME `反引号`\n行2 中文'
+  const ask = buildAskScript({ model: 'hy4', question })
+  const [body, echoed] = decodeRelayPayloads(ask)
+  assert.equal(body.model, 'hy4')
+  assert.equal(body.messages[0].content, question, '请求体里的正文必须与原始 question 逐字节一致')
+  assert.equal(echoed, question, '第二段是问题正文，供日志回显')
+
+  /**
+   * 请求体必须走 stdin，**不能**用 `-d "$payload"`。
+   *
+   * 这是同一个 128 KiB 上限的第二层：脚本本身压进限额了，但 `-d "$payload"`
+   * 又把它变成一个命令行参数 —— payload 一大，容器里照样
+   * `curl: Argument list too long`。实测 156 KB 的 question 就复现了。
+   */
+  const askCode = ask.split('\n').filter((line) => !line.trim().startsWith('#')).join('\n')
+  assert.doesNotMatch(askCode, /-d "\$payload"/, '请求体不能作为 -d 的参数传入（只看代码行，注释里提到是可以的）')
+  assert.match(ask, /--data-binary @-/, '请求体必须通过 stdin 传给 curl')
+  assert.match(ask, /printf %s "\$payload" \| curl/, 'payload 要先 printf 再管道给 curl')
+}
+
+// --- 2d. 中继路径同样不能把 payload 塞进命令行参数 ------------------------
+{
+  const payload = upstreamPayloadFromBody({ messages: HISTORY, tools: TOOLS }, { model: 'hy4' })
+  const relay = buildRelayScript({ payloads: [payload, payload] })
+  const relayCode = relay.split('\n').filter((line) => !line.trim().startsWith('#')).join('\n')
+  assert.doesNotMatch(relayCode, /-d "\$payload"/, '中继请求体不能作为 -d 的参数传入')
+  assert.match(relay, /--data-binary @-/, '中继请求体必须通过 stdin 传给 curl')
 }
 
 // --- 3. 回传侧：日志 → base64 → 原始 SSE ----------------------------------
