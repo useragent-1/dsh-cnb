@@ -2974,8 +2974,8 @@ window.__ModuleLoader__.load({
             { className: 'dcnb-muted', style: { margin: '0 0 10px', lineHeight: 1.7 } },
             '把这条路径包成标准接口，可以直接当 provider 用 —— 不需要为它改任何客户端。',
             h('br'),
-            h('strong', null, '每次请求都会起一个一次性容器'),
-            '，实测单次约 10 秒起；并发 ',
+            h('strong', null, '优先走本地桥'),
+            '（进程里就有令牌，零容器、约 1 秒）；只有桥不可用时才起一次性容器，那时约 10 秒起。并发 ',
             String(endpoint === null ? '?' : endpoint.concurrency),
             '，超出的排队。',
           ),
@@ -2986,8 +2986,51 @@ window.__ModuleLoader__.load({
                   h('dt', null, 'baseURL'),
                   h('dd', { className: 'dcnb-mono' }, endpoint.baseURL),
                   h('dt', null, '可用模型'),
-                  h('dd', null, endpoint.models.map((m) => m.id).join(' · ')),
+                  // 清单里直接带标记：🟢 FREE 是真的单价 0，¥ 标的是单价，VIP 是没开通。
+                  h('dd', null, endpoint.models.map((m) => h('span', {
+                    key: m.id,
+                    style: { marginRight: 8, whiteSpace: 'nowrap' },
+                  },
+                  h('code', { className: 'dcnb-mono' }, m.id),
+                  m.free === true
+                    ? h('span', { style: { color: '#1a7f37', fontWeight: 600 } }, ' 🟢 FREE')
+                    : m.vip === true
+                      ? h('span', { className: 'dcnb-muted' }, ' VIP')
+                      : h('span', { className: 'dcnb-muted' }, ` ¥${(m.pricePerMTok ?? 0).toFixed(2)}`),
+                  ))),
                 ),
+                /**
+                 * 免费档只看**单价**，不看 `usage.credit`。
+                 *
+                 * 早先这里写「全部计费、没有免费模型」，是因为拿 `usage.credit`
+                 * 判断：小请求它会取整成 0，于是把真免费的也算成了计费。正确的
+                 * 依据是平台价目表的 `~¥0.00/MTok` —— 那是 `hy4-flash` 和
+                 * `deepseek-v4.1-flash`，单价真的是 0，不是取整。
+                 */
+                h('div', {
+                  className: 'dcnb-muted',
+                  style: { marginTop: 10, fontSize: 11, lineHeight: 1.7 },
+                },
+                h('strong', null, '真免费档：'),
+                h('code', { className: 'dcnb-mono' }, 'hy4-flash'),
+                ' / ',
+                h('code', { className: 'dcnb-mono' }, 'deepseek-v4.1-flash'),
+                '（平台标价 ~¥0.00/MTok，单价就是 0）。其余按标价计入本仓库所属组织的 AI Credits。'
+                  + '注意 hy4 与 hy4-flash 是两个模型：前者 ¥0.78，后者免费。'
+                  + ' `usage.credit` 在小请求上会取整成 0，不能用来判免费。',
+                ),
+                endpoint.models.some((m) => m.billingLabel !== undefined)
+                  ? h('div', { style: { marginTop: 8, fontSize: 11, lineHeight: 1.9 } },
+                      endpoint.models.map((m) => h('div', {
+                        key: m.id,
+                        className: 'dcnb-muted',
+                      },
+                      h('code', { className: 'dcnb-mono' }, m.id),
+                      m.free === true ? ' 🟢 ' : ' —— ',
+                      m.billingLabel,
+                      m.tps === null || m.tps === undefined ? '' : `，${m.tps} tps`,
+                      )))
+                  : null,
                 h('div', { className: 'dcnb-row', style: { marginTop: 10 } },
                   h('button', {
                     className: 'dcnb-btn',
