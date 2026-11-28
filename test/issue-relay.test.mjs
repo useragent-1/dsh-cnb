@@ -247,7 +247,7 @@ const HISTORY = [
   assert.match(extractAskError(failed) ?? '', /Failed to connect/)
 }
 
-// --- 2f. content 为��时必须回落 reasoning_content ------------------------
+// --- 2f. content 为空时必须回落 reasoning_content ------------------------
 // hy 系模型会把**正文**整段放进 reasoning_content，content 一直空串。
 // 实测 hy4 要 5000 字输出：content=0、reasoning_content=10494、正常 [DONE]。
 // 不回落的话用户看到的是「上游没返回内容」，其实内容就在那儿。
