@@ -31,6 +31,7 @@ import {
   upstreamPayloadFromBody,
 } from '../lib/issue-proxy.js'
 import { streamLocal } from '../lib/local-gateway.js'
+import { repairLadder } from '../lib/model-guard.js'
 import http from 'node:http'
 import {
   RELAY_BEGIN,
@@ -117,11 +118,31 @@ const HISTORY = [
   assert.match(script, new RegExp(`echo ${RELAY_END}`))
   assert.match(script, /base64 -d/)
 
-  const encoded = /PAYLOAD_B64='([^']+)'/.exec(script)[1]
+  const encoded = /P1='([^']+)'/.exec(script)[1]
   assert.deepEqual(JSON.parse(Buffer.from(encoded, 'base64').toString('utf8')), payload, 'payload 解回来必须一致（含 tools 与 tool 结果）')
 
   // 容器里不该再做解析：awk 抠不出 tool_calls，这正是旧实现丢工具的原因。
   assert.doesNotMatch(script, /awk/, '容器脚本不该解析 JSON —— 交给本机的 aggregateSse')
+
+  // --- 2b. 阶梯也要进容器 ------------------------------------------------
+  // 11128 是确定性的：容器里重发同一份 body 只会再被拦一次，所以候选体
+  // 必须与请求体一起进容器，逐级换形态。这里钉住「全部级别都在」。
+  const ladder = repairLadder(payload)
+  const multi = buildRelayScript({ payloads: ladder.map((row) => row.body) })
+  const multiFile = join(SCRATCH, 'relay-multi.sh')
+  writeFileSync(multiFile, multi, 'utf8')
+  execFileSync('sh', ['-n', multiFile])
+  assert.match(multi, new RegExp(`VARIANTS=${ladder.length}`))
+  for (let index = 0; index < ladder.length; index += 1) {
+    const b64 = new RegExp(`P${index + 1}='([^']+)'`).exec(multi)[1]
+    assert.deepEqual(
+      JSON.parse(Buffer.from(b64, 'base64').toString('utf8')),
+      ladder[index].body,
+      `第 ${index} 级候选体必须完整进容器`,
+    )
+  }
+  // 只有指纹类拒绝才升级：别的错误换形态也不会变好，多试一次就是白花一次容器。
+  assert.match(multi, /\*11128\*\|\*11288\*\|\*"unapproved channel"\*/)
 }
 
 // --- 3. 回传侧：日志 → base64 → 原始 SSE ----------------------------------
@@ -250,7 +271,9 @@ const HISTORY = [
   assert.equal(last.usage.total_tokens, 9, 'usage 必须和 finish_reason 同帧给出')
 }
 
-// --- 8. streamLocal：边收边转，11128 偶发拦截要重试 -----------------------
+// --- 8. streamLocal：被指纹拦时换形态，不是原样重发 -----------------------
+// 11128 是确定性的：同一份 body 重发多少次都被拦。所以这里让上游**只在
+// 形态变了之后**放行，验证的是「换体」而非「重试」。
 {
   const SSE = [
     `data: ${JSON.stringify({ choices: [{ index: 0, delta: { role: 'assistant', content: '你' } }] })}\n\n`,
@@ -258,17 +281,24 @@ const HISTORY = [
     'data: [DONE]\n\n',
   ].join('')
   let hits = 0
+  const bodies = []
   const server = http.createServer((request, reply) => {
     hits += 1
-    request.resume()
-    if (hits === 1) {
-      // 第一次模拟内容指纹拦截：上游在响应体之前就拒。
-      reply.writeHead(400, { 'content-type': 'application/json' })
-      reply.end(JSON.stringify({ errmsg: 'Illegal API invocation from an unapproved channel', errcode: 11128 }))
-      return
-    }
-    reply.writeHead(200, { 'content-type': 'text/event-stream' })
-    reply.end(SSE)
+    const chunks = []
+    request.on('data', (chunk) => chunks.push(chunk))
+    request.on('end', () => {
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+      bodies.push(body)
+      // 还有 system 角色 = 仍是原始形态 = 上游照拦。
+      const hasSystem = body.messages.some((message) => message.role === 'system')
+      if (hasSystem) {
+        reply.writeHead(400, { 'content-type': 'application/json' })
+        reply.end(JSON.stringify({ errmsg: 'Illegal API invocation from an unapproved channel', errcode: 11128 }))
+        return
+      }
+      reply.writeHead(200, { 'content-type': 'text/event-stream' })
+      reply.end(SSE)
+    })
   })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   const port = server.address().port
@@ -277,7 +307,10 @@ const HISTORY = [
   let opened = 0
   const streamed = await streamLocal({
     model: 'hy4',
-    payload: { model: 'hy4', messages: [{ role: 'user', content: 'hi' }] },
+    payload: {
+      model: 'hy4',
+      messages: [{ role: 'system', content: '你是助手。' }, { role: 'user', content: 'hi' }],
+    },
     token: 't',
     repo: 'acme/x',
     origin: `http://127.0.0.1:${port}`,
@@ -287,12 +320,18 @@ const HISTORY = [
   server.close()
 
   assert.equal(streamed.ok, true)
-  assert.equal(hits, 2, '11128 必须重试一次')
+  assert.equal(hits, 2, '被拦后换形态重发一次')
   assert.equal(opened, 1, 'onOpen 只在真正拿到 2xx 之后调用一次')
   assert.equal(events.length, 2)
   assert.equal(events.map((event) => event.choices[0].delta.content ?? '').join(''), '你好')
   assert.equal(typeof streamed.firstEventMs, 'number')
   assert.match(streamed.text, /\[DONE\]/)
+
+  // 关键：第二次发出去的**不是同一份 body** —— system 已经折进首条 user。
+  assert.ok(bodies[0].messages.some((message) => message.role === 'system'), '第一次是原形态')
+  assert.ok(!bodies[1].messages.some((message) => message.role === 'system'), '第二次必须换形态')
+  assert.match(bodies[1].messages.find((message) => message.role === 'user').content, /你是助手/)
+  assert.match(bodies[1].messages.find((message) => message.role === 'user').content, /hi/, '原语义不丢')
 }
 
 console.log('issue relay OK · 请求透传、容器只搬字节、tool_calls 与多轮在两条后端上都成立、并发与流式拉满')
