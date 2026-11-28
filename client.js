@@ -1292,8 +1292,6 @@ window.__ModuleLoader__.load({
       const [draft, setDraft] = useState({ slug: '', name: '', visibility: 'private', description: '' })
       /** 「新建仓库」折叠面板是否展开。默认收起 —— 见顶部操作条的注释。 */
       const [creating, setCreating] = useState(false)
-      /** 「接入仓库自动清理」折叠面板是否展开。默认收起 —— 它是低频操作。 */
-      const [maintaining, setMaintaining] = useState(false)
       const [actionError, setActionError] = useState(null)
       const [actionMessage, setActionMessage] = useState(null)
       const [busy, setBusy] = useState(false)
@@ -1716,20 +1714,11 @@ window.__ModuleLoader__.load({
               h('button', { className: 'dcnb-btn', style: { marginTop: 8 }, onClick: () => setBulk(null) }, '收起'),
             ),
 
-        maintaining ? h(
+        h(
           Card,
           {
             title: '接入仓库自动清理',
-            extra: h(
-              'div',
-              { className: 'dcnb-row', style: { gap: 6 } },
-              h('button', {
-                className: 'dcnb-btn',
-                'data-tone': maintaining ? undefined : 'primary',
-                onClick: () => setMaintaining((open) => !open),
-              }, maintaining ? '收起' : '配置清理'),
-              h('button', { className: 'dcnb-btn', onClick: cleanup.reload }, '刷新'),
-            ),
+            extra: h('button', { className: 'dcnb-btn', onClick: cleanup.reload }, '刷新'),
           },
           h(
             'p',
@@ -1848,7 +1837,7 @@ window.__ModuleLoader__.load({
                   ' 生成 .cnb.yml 的 crontab 片段 —— 云端只负责按点触发，判据与本机是同一份代码。',
                 ),
               ),
-        ) : null,
+        ),
 
       )
     }
