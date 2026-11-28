@@ -142,10 +142,31 @@ assert.ok(typeof factory === 'function', 'client.js must register a factory')
  * Panel 的默认 tab 是「账号」；这个测试只看「仓库」页。
  * tab 的初始值就是一个字符串，形状唯一，按形状辨认即可。
  */
+let falseSeen = 0
 const TABS = {
   ...React,
   useState(initial) {
     if (initial === 'account') return ['repos', () => {}]
+    /**
+     * 「接入仓库自动清理」是一个折叠面板，初始值 false；这里注入 true，
+     * 才测得到展开后的正文（开关、范围说明、状态行）。
+     *
+     * 取舍：折叠态本身也有价值（用户第一眼看到的是一个「配置清理」按钮，
+     * 而不是一整块低频操作），但那是布局问题；这个套件要守的是**展开后内容
+     * 是否正确**，所以直接展开来断言。
+     */
+    /**
+     * 「接入仓库自动清理」是折叠面板，初始值 false。这里按**调用序号**展开它：
+     * ReposTab 里 useState(false) 依次是 creating / maintaining / busy / …，
+     * 第 2 个（falseSeen === 2）就是 maintaining。
+     *
+     * 不能靠初始值形状辨认 —— false 太常见，一起注入会把 creating 和 busy
+     * 也变成真，导致「批量删除按钮凭空出现」之类的假失败。
+     */
+    if (initial === false) {
+      falseSeen += 1
+      if (falseSeen === 2) return [true, () => {}]
+    }
     return React.useState(initial)
   },
 }

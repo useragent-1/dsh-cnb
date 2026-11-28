@@ -1292,6 +1292,8 @@ window.__ModuleLoader__.load({
       const [draft, setDraft] = useState({ slug: '', name: '', visibility: 'private', description: '' })
       /** 「新建仓库」折叠面板是否展开。默认收起 —— 见顶部操作条的注释。 */
       const [creating, setCreating] = useState(false)
+      /** 「接入仓库自动清理」折叠面板是否展开。默认收起 —— 它是低频操作。 */
+      const [maintaining, setMaintaining] = useState(false)
       const [actionError, setActionError] = useState(null)
       const [actionMessage, setActionMessage] = useState(null)
       const [busy, setBusy] = useState(false)
@@ -1714,9 +1716,21 @@ window.__ModuleLoader__.load({
               h('button', { className: 'dcnb-btn', style: { marginTop: 8 }, onClick: () => setBulk(null) }, '收起'),
             ),
 
-        h(
+        maintaining ? h(
           Card,
-          { title: '接入仓库自动清理', extra: h('button', { className: 'dcnb-btn', onClick: cleanup.reload }, '刷新') },
+          {
+            title: '接入仓库自动清理',
+            extra: h(
+              'div',
+              { className: 'dcnb-row', style: { gap: 6 } },
+              h('button', {
+                className: 'dcnb-btn',
+                'data-tone': maintaining ? undefined : 'primary',
+                onClick: () => setMaintaining((open) => !open),
+              }, maintaining ? '收起' : '配置清理'),
+              h('button', { className: 'dcnb-btn', onClick: cleanup.reload }, '刷新'),
+            ),
+          },
           h(
             'p',
             { className: 'dcnb-muted', style: { margin: '0 0 10px', lineHeight: 1.7 } },
@@ -1834,7 +1848,7 @@ window.__ModuleLoader__.load({
                   ' 生成 .cnb.yml 的 crontab 片段 —— 云端只负责按点触发，判据与本机是同一份代码。',
                 ),
               ),
-        ),
+        ) : null,
 
       )
     }
@@ -2601,20 +2615,14 @@ window.__ModuleLoader__.load({
         h(
           Card,
           {
-            title: '一键接入模型到 dsh',
+            /**
+             * 标题放大到 17px。
+             *
+             * Card 默认 h2 是 13px，和下面每张小卡的标题同级，看不出这是本页的
+             * 主入口。这里单独覆盖，强调「点这里开始」。
+             */
+            title: h('span', { style: { fontSize: 17, fontWeight: 700, letterSpacing: '.01em' } }, '一键接入模型到 dsh'),
           },
-          h(
-            'p',
-            { className: 'dcnb-muted', style: { margin: '0 0 10px', lineHeight: 1.7 } },
-            '这是把 CNB 的模型接进 dsh 的入口：自动建一个仓库、写入零依赖网关脚手架、云原生启动、',
-            '最后写进 dsh 的 llm-pi-ai（provider 路由 ',
-            h('code', { className: 'dcnb-mono' }, route || 'cnb-gateway'),
-            '）。',
-            h('br'),
-            '为什么必须这样：CNB 网关只接受流水线令牌，它只在运行中的云环境里存在，拿到其它机器上会被网络策略拦下（',
-            h('code', { className: 'dcnb-mono' }, '10412'),
-            '），所以代理只能跑在环境里。',
-          ),
           h(
             'div',
             { className: 'dcnb-grid', style: { marginBottom: 10 } },
@@ -2625,7 +2633,43 @@ window.__ModuleLoader__.load({
             h('label', { className: 'dcnb-muted' }, '接入端口', h('br'),
               h('input', { className: 'dcnb-input', value: port, onChange: (event) => setPort(event.target.value), style: { width: '100%' } })),
           ),
-          h('label', { className: 'dcnb-muted' }, '模型（勾选，会逐个写进 provider）'),
+          /**
+           * 标签行 + 全选/清空。
+           *
+           * 9 个模型逐个人工勾太慢，而「全都接进来」是常见需求。两个按钮都按
+           * 当前清单实时算 —— 清单增删模型时不用改这里。
+           */
+          h(
+            'div',
+            { className: 'dcnb-row', style: { gap: 8, marginBottom: 2 } },
+            h('label', { className: 'dcnb-muted' }, '模型（勾选，会逐个写进 provider）'),
+            h('span', { className: 'dcnb-spacer' }),
+            h(
+              'button',
+              {
+                className: 'dcnb-btn',
+                style: { fontSize: 11, padding: '3px 10px' },
+                disabled: (state?.modelChoices ?? []).length === 0,
+                onClick: () => setSelectedModels((state?.modelChoices ?? []).map((item) => item.id)),
+              },
+              '全选',
+            ),
+            h(
+              'button',
+              {
+                className: 'dcnb-btn',
+                style: { fontSize: 11, padding: '3px 10px' },
+                disabled: selectedModels.length === 0,
+                onClick: () => setSelectedModels([]),
+              },
+              '清空',
+            ),
+            h(
+              'span',
+              { className: 'dcnb-muted', style: { fontSize: 11 } },
+              `已选 ${selectedModels.length} / ${(state?.modelChoices ?? []).length}`,
+            ),
+          ),
           /**
            * 多选清单，替掉原来的裸文本框。
            *
@@ -2781,21 +2825,14 @@ window.__ModuleLoader__.load({
           h('pre', { className: 'dcnb-mono', style: { margin: '10px 0 0', padding: 10, borderRadius: 8, overflow: 'auto', maxHeight: 260, background: 'var(--dsw-alias-bg-base)', border: '1px solid var(--dsw-alias-border-l1)' } }, scaffold.cnf),
         ),
 
-        h(
-          Card,
-          { title: '11288 / 11128 内容风控适配' },
-          h('p', { className: 'dcnb-muted', style: { margin: '0 0 8px', lineHeight: 1.7 } },
-            '上游会扫 system / assistant 文本里的「客户端指纹」，命中整条拒绝：',
-            h('code', { className: 'dcnb-mono' }, 'HTTP 400 / code 11288（同类 11128）Illegal API invocation from an unapproved channel'),
-            '。换令牌、换模型、补请求头都无效，被拦的是提示词。云网关代理在发请求前做三件事，都不改语义：'),
-          h('ol', { className: 'dcnb-muted', style: { margin: '0 0 0 18px', padding: 0, lineHeight: 1.8 } },
-            h('li', null, '改写已知指纹句、把身份词中间插零宽空格（路径语境跳过，否则会把坏路径交给工具调用）'),
-            h('li', null, '消息形状归一：developer→system、system 提前、剥掉图片段、丢掉孤立的 tool 结果'),
-            h('li', null, '仍被拦时把 system 折进首条 user，最后逐词打散'),
-          ),
-          h('p', { className: 'dcnb-muted', style: { margin: '8px 0 0', fontSize: 11, lineHeight: 1.6 } },
-            '另外网关只认流式（非流式答 11101），所以代理一律发流式，非流式由它聚合后返回。'),
-        ),
+        /**
+         * 这张卡只留标题，正文全部去掉。
+         *
+         * 原来列出三件事（改写指纹句 / 形状归一 / 折叠打散）以及流式说明 ——
+         * 那是实现细节，用户既不需要知道也不需要选，占着一大块版面。适配本身
+         * 一直在生效，标题足以说明「这里处理过风控」。
+         */
+        h(Card, { title: '11288 / 11128 内容风控适配' }),
       )
     }
 
