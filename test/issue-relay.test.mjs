@@ -247,6 +247,39 @@ const HISTORY = [
   assert.match(extractAskError(failed) ?? '', /Failed to connect/)
 }
 
+// --- 2f. content 为��时必须回落 reasoning_content ------------------------
+// hy 系模型会把**正文**整段放进 reasoning_content，content 一直空串。
+// 实测 hy4 要 5000 字输出：content=0、reasoning_content=10494、正常 [DONE]。
+// 不回落的话用户看到的是「上游没返回内容」，其实内容就在那儿。
+{
+  const ask = buildAskScript({ model: 'hy4', question: 'x' })
+  assert.match(ask, /reasoning_content/, 'ask 脚本必须读取 reasoning_content')
+  assert.match(ask, /body == "" \? think : body/, 'content 为空时要回落到 reasoning')
+
+  // 只验 awk 语义：content 全空时应当返回 reasoning 的拼接结果。
+  const sse = [
+    'data: {"choices":[{"delta":{"content":"","reasoning_content":"第一段"}}]}',
+    'data: {"choices":[{"delta":{"content":"","reasoning_content":"第二段"}}]}',
+    'data: [DONE]',
+  ].join('\n')
+  const out = execFileSync('sh', ['-c', [
+    'raw=$(cat <<"CMD"',
+    sse,
+    'CMD',
+    ')',
+    `answer=$(printf "%s" "$raw" | awk '
+      /^data: / {
+        line = substr($0, 7)
+        if (line == "[DONE]") next
+        if (match(line, /"content":"[^"]*"/)) { s = substr(line, RSTART + 11, RLENGTH - 12); body = body s }
+        if (match(line, /"reasoning_content":"[^"]*"/)) { s = substr(line, RSTART + 21, RLENGTH - 22); think = think s }
+      }
+      END { printf "%s", (body == "" ? think : body) }')`,
+    'printf "%s" "$answer"',
+  ].join('\n')], { encoding: 'utf8' })
+  assert.equal(out, '第一段第二段', 'content 全空时必须返回 reasoning 内容')
+}
+
 // --- 3. 回传侧：日志 → base64 → 原始 SSE ----------------------------------
 {
   const sse = [
