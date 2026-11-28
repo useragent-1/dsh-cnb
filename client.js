@@ -78,6 +78,24 @@ window.__ModuleLoader__.load({
 .dcnb-kv dt{color:var(--dsw-alias-label-secondary)}
 .dcnb-kv dd{margin:0;word-break:break-all}
 .dcnb-empty{padding:24px;text-align:center;color:var(--dsw-alias-label-secondary);font-size:12px}
+.dcnb-combo{position:relative;min-width:0;flex:1}
+.dcnb-combo-trigger{display:flex;align-items:center;gap:8px;width:100%;box-sizing:border-box;font:inherit;font-size:12px;padding:6px 10px;border-radius:8px;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);cursor:pointer;text-align:left}
+.dcnb-combo-trigger:hover{border-color:var(--dsw-alias-border-l3)}
+.dcnb-combo[data-open=true] .dcnb-combo-trigger{border-color:var(--dsw-alias-brand-primary);box-shadow:0 0 0 3px color-mix(in srgb,var(--dsw-alias-brand-primary) 18%,transparent)}
+.dcnb-combo-trigger:disabled{opacity:.5;cursor:default}
+.dcnb-combo-value{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dcnb-combo-value[data-placeholder=true]{color:var(--dsw-alias-label-caption)}
+.dcnb-combo-caret{flex:0 0 auto;opacity:.55;transition:transform .15s ease}
+.dcnb-combo[data-open=true] .dcnb-combo-caret{transform:rotate(180deg)}
+.dcnb-combo-pop{position:absolute;z-index:40;top:calc(100% + 4px);left:0;right:0;min-width:220px;max-height:260px;overflow:auto;padding:4px;border-radius:10px;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);box-shadow:0 10px 28px #00000033}
+.dcnb-combo-search{width:100%;box-sizing:border-box;font:inherit;font-size:12px;padding:6px 8px;margin-bottom:4px;border-radius:7px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary)}
+.dcnb-combo-list{list-style:none;margin:0;padding:0}
+.dcnb-combo-opt{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:7px;font-size:12px;cursor:pointer;color:var(--dsw-alias-label-primary)}
+.dcnb-combo-opt[data-active=true]{background:var(--dsw-alias-interactive-bg-hover-accent)}
+.dcnb-combo-opt[data-selected=true]{font-weight:600}
+.dcnb-combo-opt .dcnb-combo-opt-main{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dcnb-combo-opt .dcnb-combo-opt-sub{flex:0 0 auto;font-size:10.5px;color:var(--dsw-alias-label-caption)}
+.dcnb-combo-none{padding:10px 8px;text-align:center;font-size:11.5px;color:var(--dsw-alias-label-caption)}
 `
 
     // ---------------------------------------------------------------- helpers
@@ -185,6 +203,159 @@ window.__ModuleLoader__.load({
           h('rect', { width: qr.size, height: qr.size, fill: '#ffffff' }),
           h('path', { d: qr.path, fill: '#111111' }),
         ),
+      )
+    }
+
+
+    /**
+     * 带搜索的组合框 —— 替掉浏览器原生 `<datalist>`。
+     *
+     * ## 为什么不用 datalist
+     *
+     * `<datalist>` 的弹出层是**浏览器自绘**的：样式完全不可控（CSS 碰不到）、
+     * 位置由浏览器决定、键盘行为各家不同、也不显示次要信息。截图里那个
+     * 灰白方块弹层就是这么来的 —— 它和面板其余部分不属同一套视觉。
+     *
+     * ## 这个实现给了什么
+     *
+     *   · 触发器长得和 `dcnb-select` 一致（同一套边框、圆角、焦点环）；
+     *   · 弹层自带搜索框，选项多了可以直接过滤；
+     *   · ↑↓ 移动、Enter 选中、Esc 关闭；点外部关闭；
+     *   · 每项可以带一行次要说明（`hint`），右侧可挂 `badge`；
+     *   · 打开时自动聚焦搜索框，滚动到当前选中项。
+     *
+     * @param {{
+     *   value: string, onChange: (next: string) => void,
+     *   options: Array<{ value: string, label?: string, hint?: string, badge?: any }>,
+     *   placeholder?: string, disabled?: boolean, emptyLabel?: string,
+     * }} props
+     */
+    function ComboBox({ value, onChange, options, placeholder = '请选择', disabled = false, emptyLabel = '没有可选项' }) {
+      const [open, setOpen] = useState(false)
+      const [query, setQuery] = useState('')
+      const [active, setActive] = useState(0)
+      const root = useRef(null)
+      const searchRef = useRef(null)
+      const listRef = useRef(null)
+
+      const filtered = useMemo(() => {
+        const needle = query.trim().toLowerCase()
+        if (needle === '') return options
+        return options.filter((option) => {
+          const haystack = `${option.value} ${option.label ?? ''} ${option.hint ?? ''}`.toLowerCase()
+          return haystack.includes(needle)
+        })
+      }, [options, query])
+
+      const current = options.find((option) => option.value === value) ?? null
+
+      // 点外部关闭：用 pointerdown 而不是 click，避免和触发器自己的 click 打架。
+      useEffect(() => {
+        if (!open) return undefined
+        const onDown = (event) => {
+          if (root.current !== null && !root.current.contains(event.target)) setOpen(false)
+        }
+        document.addEventListener('pointerdown', onDown)
+        return () => document.removeEventListener('pointerdown', onDown)
+      }, [open])
+
+      // 打开时聚焦搜索框，并把当前值滚进视野。
+      useEffect(() => {
+        if (!open) { setQuery(''); return }
+        searchRef.current?.focus()
+        const index = filtered.findIndex((option) => option.value === value)
+        setActive(index >= 0 ? index : 0)
+      }, [open])
+
+      useEffect(() => {
+        if (!open) return
+        const node = listRef.current?.querySelector('[data-active=true]')
+        node?.scrollIntoView({ block: 'nearest' })
+      }, [active, open])
+
+      const commit = (option) => {
+        if (option === undefined) return
+        onChange(option.value)
+        setOpen(false)
+      }
+
+      const onKeyDown = (event) => {
+        if (event.key === 'ArrowDown') {
+          event.preventDefault()
+          setActive((index) => Math.min(index + 1, filtered.length - 1))
+        } else if (event.key === 'ArrowUp') {
+          event.preventDefault()
+          setActive((index) => Math.max(index - 1, 0))
+        } else if (event.key === 'Enter') {
+          event.preventDefault()
+          commit(filtered[active])
+        } else if (event.key === 'Escape') {
+          event.preventDefault()
+          setOpen(false)
+        }
+      }
+
+      return h(
+        'div',
+        { className: 'dcnb-combo', 'data-open': open ? 'true' : 'false', ref: root },
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'dcnb-combo-trigger',
+            disabled,
+            onClick: () => setOpen((wasOpen) => !wasOpen),
+            onKeyDown: (event) => {
+              if (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                setOpen(true)
+              }
+            },
+          },
+          h('span', {
+            className: 'dcnb-combo-value',
+            'data-placeholder': current === null ? 'true' : 'false',
+          }, current === null ? placeholder : (current.label ?? current.value)),
+          current === null || current.badge === undefined ? null : current.badge,
+          h('svg', {
+            className: 'dcnb-combo-caret', width: 12, height: 12, viewBox: '0 0 12 12', 'aria-hidden': 'true',
+          }, h('path', { d: 'M2.5 4.5L6 8l3.5-3.5', fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round' })),
+        ),
+        open
+          ? h(
+              'div',
+              { className: 'dcnb-combo-pop', onKeyDown },
+              h('input', {
+                ref: searchRef,
+                className: 'dcnb-combo-search',
+                placeholder: '搜索…',
+                value: query,
+                onChange: (event) => { setQuery(event.target.value); setActive(0) },
+                onKeyDown,
+              }),
+              filtered.length === 0
+                ? h('div', { className: 'dcnb-combo-none' }, '没有匹配项')
+                : h(
+                    'ul',
+                    { className: 'dcnb-combo-list', ref: listRef },
+                    filtered.map((option, index) => h(
+                      'li',
+                      {
+                        key: option.value,
+                        className: 'dcnb-combo-opt',
+                        'data-active': index === active ? 'true' : 'false',
+                        'data-selected': option.value === value ? 'true' : 'false',
+                        onMouseEnter: () => setActive(index),
+                        onClick: () => commit(option),
+                        title: option.hint ?? option.value,
+                      },
+                      h('span', { className: 'dcnb-combo-opt-main' }, option.label ?? option.value),
+                      option.hint === undefined ? null : h('span', { className: 'dcnb-combo-opt-sub' }, option.hint),
+                      option.badge === undefined ? null : option.badge,
+                    )),
+                  ),
+            )
+          : null,
       )
     }
 
@@ -1119,6 +1290,8 @@ window.__ModuleLoader__.load({
     function ReposTab({ status }) {
       const [query, setQuery] = useState('')
       const [draft, setDraft] = useState({ slug: '', name: '', visibility: 'private', description: '' })
+      /** 「新建仓库」折叠面板是否展开。默认收起 —— 见顶部操作条的注释。 */
+      const [creating, setCreating] = useState(false)
       const [actionError, setActionError] = useState(null)
       const [actionMessage, setActionMessage] = useState(null)
       const [busy, setBusy] = useState(false)
@@ -1282,6 +1455,31 @@ window.__ModuleLoader__.load({
       return h(
         React.Fragment,
         null,
+        /**
+         * 顶部操作条：高频动作固定在这一行。
+         *
+         * 早先「新建仓库」是页面最底一张卡，前面挡着「我的仓库」长列表（23 个
+         * 仓库时得滚很久）和「自动清理」—— 想建个仓库要先划过全部内容。
+         * 新建是操作，列表是浏览，两者不该串成一条长滚动。
+         *
+         * 所以：操作条常驻顶部（新建 / 刷新），表单默认收起、点按钮展开，
+         * 列表居中，清理这类低频杂项留在底部。
+         */
+        h(
+          'div',
+          { className: 'dcnb-row', style: { marginBottom: 10, gap: 8 } },
+          h(
+            'button',
+            {
+              className: 'dcnb-btn',
+              'data-tone': creating ? undefined : 'primary',
+              onClick: () => setCreating((open) => !open),
+            },
+            creating ? '收起新建' : '+ 新建仓库',
+          ),
+          h('span', { className: 'dcnb-spacer' }),
+          h('button', { className: 'dcnb-btn', onClick: repos.reload }, '刷新列表'),
+        ),
         actionError === null ? null : h(Banner, null, actionError),
         actionMessage === null ? null : h(Banner, { tone: 'ok' }, actionMessage),
         links === null
@@ -1300,6 +1498,68 @@ window.__ModuleLoader__.load({
                       setLinks({ ...links, rows: resolved, starting: typeof detail?.detail?.webide !== 'string' })
                     },
             }),
+        creating ? h(
+          Card,
+          { title: '新建仓库' },
+          h(
+            'div',
+            { className: 'dcnb-grid' },
+            h(ComboBox, {
+              value: draft.slug,
+              onChange: (next) => setDraft({ ...draft, slug: next }),
+              placeholder: '选择组织',
+              options: (groups.data?.groups ?? []).map((group) => ({
+                value: group.slug,
+                label: group.slug,
+                hint: group.name !== undefined && group.name !== group.slug ? group.name : undefined,
+              })),
+              emptyLabel: '没有可用的组织',
+            }),
+            h('input', {
+              className: 'dcnb-input',
+              placeholder: '仓库名',
+              value: draft.name,
+              onChange: (event) => setDraft({ ...draft, name: event.target.value }),
+            }),
+            h(
+              'select',
+              {
+                className: 'dcnb-select',
+                value: draft.visibility,
+                onChange: (event) => setDraft({ ...draft, visibility: event.target.value }),
+              },
+              h('option', { value: 'private' }, '私有'),
+              h('option', { value: 'public' }, '公开'),
+              h('option', { value: 'secret' }, '密钥仓库'),
+            ),
+          ),
+          h('input', {
+            className: 'dcnb-input',
+            style: { marginTop: 8, width: '100%' },
+            placeholder: '仓库描述（可选）',
+            value: draft.description,
+            onChange: (event) => setDraft({ ...draft, description: event.target.value }),
+          }),
+          h(
+            'div',
+            { className: 'dcnb-row', style: { marginTop: 10 } },
+            h(
+              'button',
+              {
+                className: 'dcnb-btn',
+                'data-tone': 'primary',
+                disabled: busy || draft.slug.trim() === '' || draft.name.trim() === '',
+                onClick: () =>
+                  act('创建仓库', async () => {
+                    const result = await callApi('repos.create', draft)
+                    setDraft({ slug: draft.slug, name: '', visibility: 'private', description: '' })
+                    return result
+                  }),
+              },
+              '创建',
+            ),
+          ),
+        ) : null,
         h(
           Card,
           {
@@ -1456,11 +1716,11 @@ window.__ModuleLoader__.load({
 
         h(
           Card,
-          { title: '云网关仓库自动清理', extra: h('button', { className: 'dcnb-btn', onClick: cleanup.reload }, '刷新') },
+          { title: '接入仓库自动清理', extra: h('button', { className: 'dcnb-btn', onClick: cleanup.reload }, '刷新') },
           h(
             'p',
             { className: 'dcnb-muted', style: { margin: '0 0 10px', lineHeight: 1.7 } },
-            '「一键开通云网关」每跑一次就建一个新仓库。这一块把不用的那些自动收掉。',
+            '「一键接入模型到 dsh」每跑一次就建一个新仓库。这一块把不用的那些自动收掉。',
             h('br'),
             h('b', null, '只清本插件建的云网关仓库'), '（名字像 ',
             h('code', { className: 'dcnb-mono' }, 'dsh-gateway-…'),
@@ -1576,65 +1836,6 @@ window.__ModuleLoader__.load({
               ),
         ),
 
-        h(
-          Card,
-          { title: '新建仓库' },
-          h(
-            'div',
-            { className: 'dcnb-grid' },
-            h('input', {
-              className: 'dcnb-input',
-              placeholder: '组织 slug',
-              list: 'dcnb-groups',
-              value: draft.slug,
-              onChange: (event) => setDraft({ ...draft, slug: event.target.value }),
-            }),
-            h('datalist', { id: 'dcnb-groups' }, (groups.data?.groups ?? []).map((group) => h('option', { key: group.slug, value: group.slug }))),
-            h('input', {
-              className: 'dcnb-input',
-              placeholder: '仓库名',
-              value: draft.name,
-              onChange: (event) => setDraft({ ...draft, name: event.target.value }),
-            }),
-            h(
-              'select',
-              {
-                className: 'dcnb-select',
-                value: draft.visibility,
-                onChange: (event) => setDraft({ ...draft, visibility: event.target.value }),
-              },
-              h('option', { value: 'private' }, '私有'),
-              h('option', { value: 'public' }, '公开'),
-              h('option', { value: 'secret' }, '密钥仓库'),
-            ),
-          ),
-          h('input', {
-            className: 'dcnb-input',
-            style: { marginTop: 8, width: '100%' },
-            placeholder: '仓库描述（可选）',
-            value: draft.description,
-            onChange: (event) => setDraft({ ...draft, description: event.target.value }),
-          }),
-          h(
-            'div',
-            { className: 'dcnb-row', style: { marginTop: 10 } },
-            h(
-              'button',
-              {
-                className: 'dcnb-btn',
-                'data-tone': 'primary',
-                disabled: busy || draft.slug.trim() === '' || draft.name.trim() === '',
-                onClick: () =>
-                  act('创建仓库', async () => {
-                    const result = await callApi('repos.create', draft)
-                    setDraft({ slug: draft.slug, name: '', visibility: 'private', description: '' })
-                    return result
-                  }),
-              },
-              '创建',
-            ),
-          ),
-        ),
       )
     }
 
@@ -1826,6 +2027,47 @@ window.__ModuleLoader__.load({
       return h(
         React.Fragment,
         null,
+        /**
+         * 顶部操作条：和「仓库」页同一套结构 —— 操作在上、列表居中、杂项在下。
+         *
+         * 「启动开发」原来只是页面底部「仓库开发按钮与状态」卡里的一个按钮，
+         * 要先滚过整张环境列表才能点到。它是最常用的动作之一，提到顶部。
+         */
+        h(
+          'div',
+          { className: 'dcnb-row', style: { marginBottom: 10, gap: 8 } },
+          h('span', { className: 'dcnb-muted', style: { fontSize: 12, alignSelf: 'center' } }, '启动开发环境：'),
+          h('input', {
+            className: 'dcnb-input',
+            placeholder: 'group/name',
+            value: repo,
+            onChange: (event) => setRepo(event.target.value),
+            style: { maxWidth: 260 },
+          }),
+          h(
+            'button',
+            {
+              className: 'dcnb-btn',
+              'data-tone': 'primary',
+              disabled: repo.trim() === '',
+              onClick: () =>
+                act(async () => {
+                  const started = await callApi('workspaces.open', { repo: repo.trim() })
+                  setLinks({
+                    title: `${repo.trim()} · 启动结果`,
+                    rows: normaliseLinks(started),
+                    repo: repo.trim(),
+                    sn: started.sn,
+                    starting: typeof started.webide !== 'string' || started.webide === '',
+                  })
+                  return started
+                }, '启动开发环境'),
+            },
+            '启动',
+          ),
+          h('span', { className: 'dcnb-spacer' }),
+          h('button', { className: 'dcnb-btn', onClick: workspaces.reload }, '刷新列表'),
+        ),
         actionError === null ? null : h(Banner, null, actionError),
         links === null
           ? null
@@ -2045,38 +2287,17 @@ window.__ModuleLoader__.load({
         ),
         h(
           Card,
-          { title: '仓库开发按钮与状态' },
+          { title: '该仓库的开发按钮配置' },
+          /**
+           * 这里只做「查」，不再重复输入框和启动按钮 ——
+           * 仓库名与「启动」都在顶部操作条上，两处并存会让人不知道该用哪个。
+           */
           h(
-            'div',
-            { className: 'dcnb-row' },
-            h('input', {
-              className: 'dcnb-input',
-              placeholder: 'group/name',
-              value: repo,
-              onChange: (event) => setRepo(event.target.value),
-            }),
-            h('button', { className: 'dcnb-btn', disabled: repo.trim() === '', onClick: detail.reload }, '查询'),
-            h(
-              'button',
-              {
-                className: 'dcnb-btn',
-                'data-tone': 'primary',
-                disabled: repo.trim() === '',
-                onClick: () =>
-                  act(async () => {
-                    const started = await callApi('workspaces.open', { repo: repo.trim() })
-                    setLinks({
-                      title: `${repo.trim()} · 启动结果`,
-                      rows: normaliseLinks(started),
-                      repo: repo.trim(),
-                      sn: started.sn,
-                      starting: typeof started.webide !== 'string' || started.webide === '',
-                    })
-                    return started
-                  }, '启动开发环境'),
-              },
-              '启动开发',
-            ),
+            'p',
+            { className: 'dcnb-muted', style: { margin: '0 0 8px', fontSize: 12 } },
+            repo.trim() === ''
+              ? '先在顶部填 group/name，这里会显示该仓库的开发按钮配置。'
+              : `正在查看 ${repo.trim()} 的开发按钮配置。`,
           ),
           detail.status === 'error' ? h(Banner, null, detail.error) : null,
           detail.data === null
@@ -2269,7 +2490,7 @@ window.__ModuleLoader__.load({
     function CloudGatewayTab({ status }) {
       const [org, setOrg] = useState('')
       const [name, setName] = useState('')
-      const [models, setModels] = useState('deepseek-v4.1-flash,deepseek-v4-flash,glm-5.3-flash,step-5-preview')
+      const [selectedModels, setSelectedModels] = useState(['deepseek-v4.1-flash', 'deepseek-v4-flash'])
       const [port, setPort] = useState('8794')
       const [route, setRoute] = useState('cnb-gateway')
       const [makeDefault, setMakeDefault] = useState(true)
@@ -2301,14 +2522,14 @@ window.__ModuleLoader__.load({
           const payload = {
             ...(org.trim() === '' ? {} : { org: org.trim() }),
             ...(name.trim() === '' ? {} : { name: name.trim() }),
-            ...(models.trim() === '' ? {} : { models: models.split(',').map((entry) => entry.trim()).filter(Boolean) }),
+            models: selectedModels,
             port: Number(port) || 8794,
             route: route.trim() || 'cnb-gateway',
             makeDefault,
           }
           const outcome = await callApi('cloud.provision', payload)
           setResult(outcome)
-          if (outcome.ready) setNote(`云网关已就绪：${outcome.harvest.url}`)
+          if (outcome.ready) setNote(`模型接入已就绪：${outcome.harvest.url}`)
           else setError('链路没有完全打通，展开下面的步骤看卡在哪一步。')
           await loadState()
         } catch (provisionError) {
@@ -2317,7 +2538,7 @@ window.__ModuleLoader__.load({
         } finally {
           setBusy(false)
         }
-      }, [loadState, makeDefault, models, name, org, port, route])
+      }, [loadState, makeDefault, selectedModels, name, org, port, route])
 
       // 环境重建后地址会变，所以「重新采集」是一个常用按钮而不是兜底。
       const harvest = useCallback(async () => {
@@ -2343,27 +2564,27 @@ window.__ModuleLoader__.load({
         setBusy(true)
         setCheck(null)
         try {
-          setCheck(await callApi('cloud.verify', { ...(models.trim() === '' ? {} : { model: models.split(',')[0].trim() }) }))
+          setCheck(await callApi('cloud.verify', { ...(selectedModels.length === 0 ? {} : { model: selectedModels[0] }) }))
         } catch (verifyError) {
           setCheck({ ok: false, reason: verifyError.message })
         } finally {
           setBusy(false)
         }
-      }, [models])
+      }, [selectedModels])
 
       const preview = useCallback(async () => {
         setBusy(true)
         try {
           setScaffold(await callApi('cloud.scaffold', {
             port: Number(port) || 8794,
-            models: models.split(',').map((entry) => entry.trim()).filter(Boolean),
+            models: selectedModels,
           }))
         } catch (previewError) {
           setError(previewError.message)
         } finally {
           setBusy(false)
         }
-      }, [models, port])
+      }, [selectedModels, port])
 
       if (!status?.loggedIn) return h(Banner, { tone: 'error' }, '请先在「账号」页扫码登录 CNB')
 
@@ -2380,12 +2601,12 @@ window.__ModuleLoader__.load({
         h(
           Card,
           {
-            title: '一键开通云网关',
+            title: '一键接入模型到 dsh',
           },
           h(
             'p',
             { className: 'dcnb-muted', style: { margin: '0 0 10px', lineHeight: 1.7 } },
-            '自动建一个新仓库、把零依赖网关脚手架写进去、云原生启动、从环境日志里采集对外地址与 key，',
+            '这是把 CNB 的模型接进 dsh 的入口：自动建一个仓库、写入零依赖网关脚手架、云原生启动、',
             '最后写进 dsh 的 llm-pi-ai（provider 路由 ',
             h('code', { className: 'dcnb-mono' }, route || 'cnb-gateway'),
             '）。',
@@ -2401,11 +2622,79 @@ window.__ModuleLoader__.load({
               h('input', { className: 'dcnb-input', value: org, onChange: (event) => setOrg(event.target.value), placeholder: '例如 your-org', style: { width: '100%' } })),
             h('label', { className: 'dcnb-muted' }, '仓库名（留空＝自动）', h('br'),
               h('input', { className: 'dcnb-input', value: name, onChange: (event) => setName(event.target.value), placeholder: 'dsh-gateway-…', style: { width: '100%' } })),
-            h('label', { className: 'dcnb-muted' }, '云网关端口', h('br'),
+            h('label', { className: 'dcnb-muted' }, '接入端口', h('br'),
               h('input', { className: 'dcnb-input', value: port, onChange: (event) => setPort(event.target.value), style: { width: '100%' } })),
           ),
-          h('label', { className: 'dcnb-muted' }, '模型（逗号分隔，会逐个写进 provider）'),
-          h('input', { className: 'dcnb-input', value: models, onChange: (event) => setModels(event.target.value), style: { width: '100%', marginBottom: 10 } }),
+          h('label', { className: 'dcnb-muted' }, '模型（勾选，会逐个写进 provider）'),
+          /**
+           * 多选清单，替掉原来的裸文本框。
+           *
+           * 文本框那版要用户自己记得模型 id 并保证逗号分隔正确 —— 拼错一个
+           * 就只是少一个模型可用，界面上完全看不出来。这里直接列清单，
+           * 顺带把单价标出来 —— 每个模型都是有代价的，不该让人误以为有免费的。
+           */
+          h(
+            'div',
+            {
+              style: {
+                display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
+                gap: 6, margin: '6px 0 10px',
+              },
+            },
+            ((state === null || state.modelChoices === undefined) ? [] : state.modelChoices).map((item) =>
+              h(
+                'label',
+                {
+                  key: item.id,
+                  title: item.note ?? item.id,
+                  style: {
+                    display: 'flex', alignItems: 'center', gap: 6, padding: '5px 8px',
+                    borderRadius: 8, cursor: 'pointer', fontSize: 12,
+                    border: '1px solid var(--dsw-alias-border-l1)',
+                    background: selectedModels.includes(item.id)
+                      ? 'var(--dsw-alias-bg-base)'
+                      : 'transparent',
+                  },
+                },
+                h('input', {
+                  type: 'checkbox',
+                  checked: selectedModels.includes(item.id),
+                  onChange: (event) => {
+                    setSelectedModels((current) => (event.target.checked
+                      ? [...current, item.id]
+                      : current.filter((id) => id !== item.id)))
+                  },
+                }),
+                h('span', { style: { flex: 1, minWidth: 0 } }, item.label ?? item.id),
+                /**
+                 * 只标价，不标「免费」。
+                 *
+                 * 早先按平台价目表把单价 0 的那几档打了「免费」徽标 —— 但那是
+                 * **价目表上的 0**，不代表走这条路实际不产生消耗：request 走的是
+                 * CodeBuddy / 云网关，用量照样记在组织的 AI Credits 里。
+                 * 标错的代价比不标大得多，所以统一只显示单价。
+                 */
+                /**
+                 * 只显示倍率，与 CNB 模型面板一致。
+                 *
+                 * 倍率取自面板（后端 MODEL_CHOICES 的 rate 字段），不是自己按单价
+                 * 换算的 —— 那两套数字对不上（面板 0.11x 的 deepseek-v4.1-flash，
+                 * 按单价会被算成 0 并标成免费）。
+                 *
+                 * null 表示面板没列出这个模型的倍率，显示「—」而不是 0。
+                 */
+                item.rate === null || item.rate === undefined
+                  ? h('span', { className: 'dcnb-muted', style: { fontSize: 10 } }, '—')
+                  : h('span', {
+                      className: 'dcnb-muted',
+                      style: { fontSize: 10, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' },
+                    }, item.rate),
+              )),
+          ),
+          selectedModels.length === 0
+            ? h('p', { className: 'dcnb-muted', style: { margin: '0 0 10px', fontSize: 11, color: 'var(--dsw-alias-label-warning, #b45309)' } },
+                '至少勾一个模型，否则 provider 里没有任何可选模型。')
+            : null,
           h('label', { className: 'dcnb-muted' }, 'provider 路由名'),
           h('input', { className: 'dcnb-input', value: route, onChange: (event) => setRoute(event.target.value), style: { width: '100%', marginBottom: 10 } }),
           h(
@@ -2809,7 +3098,7 @@ window.__ModuleLoader__.load({
       ['repos', '仓库'],
       ['envs', '开发环境'],
       ['usage', '用量'],
-      ['cloud', '云网关'],
+      ['cloud', '模型接入'],
       ['keepalive', '保活'],
     ]
 
@@ -2829,7 +3118,7 @@ window.__ModuleLoader__.load({
             'div',
             null,
             h('h1', null, 'CNB'),
-            h('p', null, `${current[1]} · 扫码登录、仓库、云原生开发、组织用量与网关模型`),
+            h('p', null, `${current[1]} · 扫码登录、仓库、云原生开发、组织用量与模型接入`),
           ),
           h('span', { className: 'dcnb-spacer' }),
           status.status === 'error'

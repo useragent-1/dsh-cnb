@@ -177,7 +177,7 @@ const rendered = nodes.join(' | ')
 
 // --- 2. 自动清理区块存在，且如实显示关闭/未运行 ----------------------
 {
-  assert.ok(rendered.includes('云网关仓库自动清理'), 'the cleanup card renders')
+  assert.ok(rendered.includes('接入仓库自动清理'), 'the cleanup card renders')
   assert.ok(rendered.includes('开启自动删除'), 'with its switch')
   // 范围不再是下拉选项，而是写死在说明里的一句话 —— 这样它不会被误当成可配置的。
   assert.ok(rendered.includes('只清本插件建的云网关仓库'), 'the scope is stated as a fact, not an option')
