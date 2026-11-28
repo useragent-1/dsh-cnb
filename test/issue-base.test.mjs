@@ -1,101 +1,47 @@
 /**
- * issue 反代的地址必须按**当前环境**推，不能写死回环。
+ * 模型清单的完整性：FREE_MODELS 现在住在 model-catalog.js。
  *
- * ## 这条测的是「别人装了能不能用」
+ * 这份清单原来在 issue-gateway.js 里（Issue 反代那套已经整个删掉了），
+ * 但 `local.*` 本地直连仍然依赖它列模型 —— 所以搬到 model-catalog.js 保留。
  *
- * dsh 在 CNB 环境里以 `--host <容器IP>` 启动（实测 `172.17.0.16`），所以
- * `http://127.0.0.1:3080/...` 上**没有任何东西在监听**：
- *
- *     127.0.0.1:3080     -> 000   （连不上）
- *     172.17.0.16:3080   -> 200
- *     xxx-3080.cnb.run   -> 200
- *
- * 写死回环的 provider 在**所有**环境里都是坏的，报错却只说 connection refused，
- * 看不出是地址问题。更迷惑的是「在我这台能用」：某次配置里恰好写了容器 IP，
- * 换一台环境那个 IP 就不存在了。
- *
- * 所以默认值必须走端口预览模板，它会在每次启动时按当前环境重算。
+ * 钉住三件事：
+ *   1. 每条都带标价信息（`pricePerMTok` 不能是 undefined，否则界面显示 ¥undefined）；
+ *   2. `free` 只能由单价推导 —— 手写会造出「标着免费但计费」；
+ *   3. 真正免费的档位必须包含在内（实测平台面板标 ~¥0.00/MTok 的那几个）。
  */
 import assert from 'node:assert/strict'
-import { issueBaseFor } from '../lib/index.js'
 
-// --- 1. 有端口预览模板时，用当前环境的域名 ----------------------------
+import { FREE_MODELS } from '../lib/model-catalog.js'
+
+// --- 1. 结构完整 ------------------------------------------------------
 {
-  const url = issueBaseFor({ CNB_VSCODE_PROXY_URI: 'https://9ii8zsqtus-{{port}}.cnb.run' })
-  assert.equal(url, 'https://9ii8zsqtus-3080.cnb.run/dsh-cnb/issue/v1')
-  // 换个环境就是另一个域名 —— 这正是「每台环境各自算一遍」的意思。
-  const other = issueBaseFor({ CNB_VSCODE_PROXY_URI: 'https://l4v7a0n4ls-{{port}}.cnb.run' })
-  assert.notEqual(other, url)
-  assert.match(other, /^https:\/\/l4v7a0n4ls-3080\.cnb\.run\//)
-}
-
-// --- 2. 模板里的 {{port}} 必须被换成 web 端口 -------------------------
-{
-  assert.match(issueBaseFor({ CNB_VSCODE_PROXY_URI: 'https://x-{{port}}.cnb.run' }, 4000), /x-4000\.cnb\.run/)
-  // 尾斜杠不能变成双斜杠。
-  assert.equal(
-    issueBaseFor({ CNB_VSCODE_PROXY_URI: 'https://x-{{port}}.cnb.run/' }),
-    'https://x-3080.cnb.run/dsh-cnb/issue/v1',
-  )
-  // 模板里没有 {{port}} 就不是端口预览模板，退回下一档。
-  const noToken = issueBaseFor({ CNB_VSCODE_PROXY_URI: 'https://fixed.cnb.run', CNB_WORKSPACE_HOST: '10.0.0.5' })
-  assert.equal(noToken, 'http://10.0.0.5:3080/dsh-cnb/issue/v1')
-}
-
-// --- 3. 没有模板时用容器 IP，而不是回环 -------------------------------
-{
-  const url = issueBaseFor({ CNB_WORKSPACE_HOST: '172.17.0.16' })
-  assert.equal(url, 'http://172.17.0.16:3080/dsh-cnb/issue/v1')
-  assert.ok(!url.includes('127.0.0.1'), 'the container IP beats loopback: loopback has no listener')
-}
-
-// --- 4. 回环只是最后兜底 ----------------------------------------------
-{
-  const url = issueBaseFor({})
-  assert.equal(url, 'http://127.0.0.1:3080/dsh-cnb/issue/v1')
-  // 空白值不能当有效值用（环境变量常见形态）。
-  const blank = issueBaseFor({ CNB_WORKSPACE_HOST: '   ', CNB_VSCODE_PROXY_URI: '' })
-  assert.equal(blank, 'http://127.0.0.1:3080/dsh-cnb/issue/v1')
-}
-
-// --- 4b. 容器主机名不是地址，不能拿来当 host ---------------------------
-//
-// 实测（流水线容器）：`CNB_VSCODE_PROXY_URI` 为空，`hostname` 是 `2bb575c42639`
-// 这种容器 ID。把它写进 provider 只会得到一个从别处解析不了的地址 —— 比回环更
-// 糟，因为回环至少语义诚实（本机跑、本机用），而容器主机名看起来像个有效主机。
-{
-  const url = issueBaseFor({ HOSTNAME: '2bb575c42639' })
-  assert.ok(!url.includes('2bb575c42639'), 'a container hostname must never become the provider host')
-  assert.equal(url, 'http://127.0.0.1:3080/dsh-cnb/issue/v1')
-  // 真给了可路由地址才用它。
-  assert.equal(
-    issueBaseFor({ HOSTNAME: '2bb575c42639', CNB_WORKSPACE_HOST: '172.17.0.24' }),
-    'http://172.17.0.24:3080/dsh-cnb/issue/v1',
-  )
-}
-
-// --- 4c. 真实的两种环境各算各的 ---------------------------------------
-//
-// 这两个值是从真环境里读出来的，不是编的：
-//   · 云原生开发环境（dsh 主进程所在）：CNB_VSCODE_PROXY_URI 带 {{port}} 模板
-//   · 流水线容器：该变量为空
-// 后者根本不会跑本插件（webServer 只在 dsh 主进程里注册），所以前者是常态。
-{
-  const devEnv = issueBaseFor({ CNB_VSCODE_PROXY_URI: 'https://76j9sspyrr-{{port}}.cnb.run' })
-  assert.equal(devEnv, 'https://76j9sspyrr-3080.cnb.run/dsh-cnb/issue/v1')
-
-  const anotherDev = issueBaseFor({ CNB_VSCODE_PROXY_URI: 'https://l4v7a0n4ls-{{port}}.cnb.run' })
-  assert.equal(anotherDev, 'https://l4v7a0n4ls-3080.cnb.run/dsh-cnb/issue/v1')
-  assert.notEqual(anotherDev, devEnv, 'each environment derives its own domain')
-}
-
-// --- 5. 路径固定，且总是指向本插件的反代 ------------------------------
-{
-  for (const env of [
-    { CNB_VSCODE_PROXY_URI: 'https://a-{{port}}.cnb.run' },
-    { CNB_WORKSPACE_HOST: '1.2.3.4' },
-    {},
-  ]) {
-    assert.match(issueBaseFor(env), /\/dsh-cnb\/issue\/v1$/, 'every form ends at the issue proxy path')
+  assert.ok(Array.isArray(FREE_MODELS), 'FREE_MODELS 必须是数组')
+  assert.ok(FREE_MODELS.length > 0, '模型清单不能为空')
+  for (const entry of FREE_MODELS) {
+    assert.equal(typeof entry.id, 'string')
+    assert.ok(entry.id.length > 0)
+    assert.notEqual(entry.pricePerMTok, undefined, `${entry.id} 缺 pricePerMTok`)
+    assert.equal(
+      entry.free === true,
+      entry.pricePerMTok === 0,
+      `${entry.id} 的 free 与 pricePerMTok 不一致`,
+    )
   }
 }
+
+// --- 2. 免费档必须包含 ------------------------------------------------
+{
+  const free = FREE_MODELS.filter((entry) => entry.free === true).map((entry) => entry.id)
+  assert.ok(free.includes('deepseek-v4.1-flash'), 'deepseek-v4.1-flash 应当是免费档')
+  assert.ok(free.includes('hy4-flash'), 'hy4-flash 应当是免费档')
+  // hy4 与 hy4-flash 是两个模型：前者 ¥0.78，后者免费。这个区别踩过。
+  assert.ok(!free.includes('hy4'), 'hy4 不是免费档（¥0.78）')
+}
+
+// --- 3. 模型 id 不重复 ------------------------------------------------
+{
+  const ids = FREE_MODELS.map((entry) => entry.id)
+  assert.equal(new Set(ids).size, ids.length, '模型 id 不能重复')
+}
+
+console.log('model catalog OK · 标价完整、free 由单价推导、免费档齐全')
