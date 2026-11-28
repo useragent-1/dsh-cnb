@@ -40,6 +40,8 @@ import {
   RELAY_END,
   buildAskScript,
   buildRelayScript,
+  extractAnswer,
+  extractAskError,
   extractRelayError,
   extractRelaySse,
 } from '../lib/ask-script.js'
@@ -220,6 +222,29 @@ const HISTORY = [
   const relayCode = relay.split('\n').filter((line) => !line.trim().startsWith('#')).join('\n')
   assert.doesNotMatch(relayCode, /-d "\$payload"/, '中继请求体不能作为 -d 的参数传入')
   assert.match(relay, /--data-binary @-/, '中继请求体必须通过 stdin 传给 curl')
+}
+
+// --- 2e. 脚本回显不能被当成运行结果 --------------------------------------
+// 容器跑成功、答案已经在日志里时，回显的失败分支也不能抢先判成失败。
+{
+  const ok = [
+    'Runner[1][stage-0] set -u',
+    // 这是**回显的源码**，不是输出 —— 必须跳过。
+    'Runner[1][stage-0]   echo "DSH_ASK_ERROR=请求体解压失败（容器无 gzip，或 blob 被截断）"',
+    'Runner[1][stage-0]   echo "DSH_ASK_ERROR=$err"',
+    'Runner[1][stage-0] DSH_ASK_BEGIN',
+    'Runner[1][stage-0] 真正的答案',
+    'Runner[1][stage-0] DSH_ASK_END',
+  ].join('\n')
+  assert.equal(extractAskError(ok), null, '回显行不能被当成容器错误')
+  assert.equal(extractAnswer(ok), '真正的答案')
+
+  // 真的失败：容器执行 echo 出来的那一行，前面没有 echo 源码。
+  const failed = [
+    'Runner[1][stage-0] set -u',
+    'Runner[1][stage-0] DSH_ASK_ERROR=curl: (7) Failed to connect',
+  ].join('\n')
+  assert.match(extractAskError(failed) ?? '', /Failed to connect/)
 }
 
 // --- 3. 回传侧：日志 → base64 → 原始 SSE ----------------------------------
